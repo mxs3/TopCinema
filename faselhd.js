@@ -120,103 +120,68 @@ async function extractEpisodes(url) {
 
 // ==== Stream URL ====
 async function extractStreamUrl(url) {
-    // ==== Utilities ====
-    const hasFetchV2 = typeof fetchv2 === "function";
-
-    async function httpGet(u, opts = {}) {
-        try {
-            if (hasFetchV2) {
-                return await fetchv2(
-                    u, 
-                    opts.headers || {}, 
-                    opts.method || "GET", 
-                    opts.body || null
-                );
-            }
-            return await fetch(u, { 
-                method: opts.method || "GET", 
-                headers: opts.headers || {}, 
-                body: opts.body || null 
-            });
-        } catch (err) {
-            return { text: async () => "", ok: false };
-        }
-    }
-
-    function soraMatch(pattern, input, group = 1) {
-        const regex = new RegExp(pattern, "i");
-        const match = regex.exec(input);
-        return match ? match[group] : null;
-    }
-
-    function soraExtractMediaFromHtml(html) {
-        const results = [];
-        // <source src="">
-        const sourceRegex = /<source[^>]+src="([^"]+)"/g;
-        let match;
-        while ((match = sourceRegex.exec(html)) !== null) {
-            results.push(match[1]);
-        }
-        // <video src="">
-        const videoRegex = /<video[^>]+src="([^"]+)"/g;
-        while ((match = videoRegex.exec(html)) !== null) {
-            results.push(match[1]);
-        }
-        return results;
-    }
-
-    // ==== Main Extraction Flow ====
     try {
-        // 1. Fetch main page
         const response = await httpGet(url);
         const html = await response.text();
 
-        // 2. Extract iframe with video_player
-        const iframeRegex = /<iframe[^>]+src="([^"]+video_player\?player_token=[^"]+)"/i;
-        const iframeUrl = soraMatch(iframeRegex, html, 1);
+        // iframe or onclick
+        let match = /<iframe[^>]+src=['"]([^'"]+)['"]/.exec(html);
+        if (!match) match = /onclick="player_iframe\.location\.href\s*=\s*'([^']+)'"/.exec(html);
+        if (!match || !match[1]) return "";
 
-        if (!iframeUrl) {
-            return JSON.stringify([{ server: "FaselHD", url: "fallbackUrl" }]);
+        const streamUrl = match[1].trim();
+        const streamResponse = await httpGet(streamUrl);
+        const streamContent = await streamResponse.text();
+
+        const deobfuscated = deobfuscate(streamContent);
+        if (deobfuscated) {
+            const fileMatch = /"sources"\s*:\s*\[\s*{\s*"file"\s*:\s*"([^"]+)"/.exec(deobfuscated);
+            if (fileMatch && fileMatch[1]) return fileMatch[1].trim();
+        }
+        return "";
+
+    } catch {
+        return "";
+    }
+}
+
+// ==== Deobfuscator ====
+function deobfuscate(streamContent) {
+    try {
+        const hideVarRegex = /var\s+(hide[*_]my_HTML_[a-zA-Z0-9_*]+)\s*=\s*([^;]+);/;
+        const hideMatch = streamContent.match(hideVarRegex);
+        if (!hideMatch) return null;
+
+        let encodedString = hideMatch[2].trim();
+        if (encodedString.includes('+')) {
+            encodedString = [...encodedString.matchAll(/'([^']*)'/g)].map(m => m[1]).join('');
+        } else {
+            encodedString = encodedString.replace(/^['"]|['"]$/g, '');
         }
 
-        // 3. Fetch iframe page
-        const iframeRes = await httpGet(iframeUrl, { headers: { Referer: url } });
-        const iframeHtml = await iframeRes.text();
+        const parts = encodedString.split('.').filter(p => p.trim().length > 0);
 
-        // 4. Directly extract video/src
-        let mediaLinks = soraExtractMediaFromHtml(iframeHtml);
+        let subtractionValue = 61;
+        const dynamicMatch = streamContent.match(/\)\s*-\s*(\d+)\s*\)\s*;\s*\}\s*\)\s*;\s*document/);
+        if (dynamicMatch) subtractionValue = parseInt(dynamicMatch[1]);
 
-        // 5. Check for sources hidden inside <script>
-        if (mediaLinks.length === 0) {
-            const scriptRegex = /file\s*:\s*"(https?:\/\/[^"]+)"/g;
-            let match;
-            while ((match = scriptRegex.exec(iframeHtml)) !== null) {
-                mediaLinks.push(match[1]);
-            }
+        let decodedString = '';
+        for (const part of parts) {
+            try {
+                const padded = part.length % 4 === 2 ? part + '==' : part.length % 4 === 3 ? part + '=' : part;
+                const decoded = atob(padded);
+                const numbers = decoded.replace(/\D/g, '');
+                if (numbers) {
+                    const charCode = parseInt(numbers) - subtractionValue;
+                    if (charCode > 0 && charCode < 1114111) {
+                        decodedString += String.fromCharCode(charCode);
+                    }
+                }
+            } catch { }
         }
+        return decodedString;
 
-        // 6. Check for m3u8 playlist links
-        if (mediaLinks.length === 0) {
-            const m3u8Regex = /(https?:\/\/[^"']+\.m3u8[^"']*)/g;
-            let match;
-            while ((match = m3u8Regex.exec(iframeHtml)) !== null) {
-                mediaLinks.push(match[1]);
-            }
-        }
-
-        // 7. Return results
-        if (mediaLinks.length > 0) {
-            return JSON.stringify(mediaLinks.map(link => ({
-                server: "FaselHD",
-                quality: link.includes("m3u8") ? "HLS" : "MP4",
-                url: link
-            })));
-        }
-
-        // 8. Fallback
-        return JSON.stringify([{ server: "FaselHD", url: "fallbackUrl" }]);
-
-    } catch (err) {
-        return JSON.stringify([{ server: "FaselHD", url: "fallbackUrl" }]);
+    } catch {
+        return null;
     }
 }
