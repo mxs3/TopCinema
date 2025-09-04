@@ -20,6 +20,13 @@ async function httpGet(url, headers = {}) {
 
 // ==== Search ====
 async function searchResults(keyword) {
+    function cleanTitle(title) {
+        return title
+            .replace(/^انمي\s*/i, "")                          // يشيل "انمي" من الأول
+            .replace(/\(.*?(مترجم|مدبلج).*?\)/gi, "")          // يشيل "(مترجم)" أو "(مدبلج)"
+            .trim();
+    }
+
     const results = [];
     try {
         const response = await httpGet("https://www.faselhds.xyz/?s=" + encodeURIComponent(keyword));
@@ -29,7 +36,7 @@ async function searchResults(keyword) {
         let match;
         while ((match = regex.exec(html)) !== null) {
             results.push({
-                title: decodeHtmlEntities(match[3].trim()),
+                title: cleanTitle(decodeHtmlEntities(match[3].trim())),
                 image: match[2].trim(),
                 href: match[1].trim()
             });
