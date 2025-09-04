@@ -126,7 +126,12 @@ async function extractStreamUrl(url) {
     async function httpGet(u, opts = {}) {
         try {
             if (hasFetchV2) {
-                return await fetchv2(u, opts.headers || {}, opts.method || "GET", opts.body || null);
+                return await fetchv2(
+                    u, 
+                    opts.headers || {}, 
+                    opts.method || "GET", 
+                    opts.body || null
+                );
             }
             return await fetch(u, { 
                 method: opts.method || "GET", 
@@ -146,13 +151,13 @@ async function extractStreamUrl(url) {
 
     function soraExtractMediaFromHtml(html) {
         const results = [];
-        // direct <source src="">
-        const sourceRegex = /<source[^>]+src="([^"]+)"[^>]*>/g;
+        // <source src="">
+        const sourceRegex = /<source[^>]+src="([^"]+)"/g;
         let match;
         while ((match = sourceRegex.exec(html)) !== null) {
             results.push(match[1]);
         }
-        // direct <video src="">
+        // <video src="">
         const videoRegex = /<video[^>]+src="([^"]+)"/g;
         while ((match = videoRegex.exec(html)) !== null) {
             results.push(match[1]);
@@ -162,47 +167,44 @@ async function extractStreamUrl(url) {
 
     // ==== Main Extraction Flow ====
     try {
-        // 1. Fetch the episode/page
+        // 1. Fetch main page
         const response = await httpGet(url);
         const html = await response.text();
 
-        // 2. Locate iframe with video_player
+        // 2. Extract iframe with video_player
         const iframeRegex = /<iframe[^>]+src="([^"]+video_player\?player_token=[^"]+)"/i;
         const iframeUrl = soraMatch(iframeRegex, html, 1);
 
         if (!iframeUrl) {
-            return JSON.stringify([{ 
-                server: "FaselHD", 
-                quality: "Error", 
-                url: "fallbackUrl" 
-            }]);
+            return JSON.stringify([{ server: "FaselHD", url: "fallbackUrl" }]);
         }
 
         // 3. Fetch iframe page
-        const iframeRes = await httpGet(iframeUrl, {
-            headers: { Referer: url }
-        });
+        const iframeRes = await httpGet(iframeUrl, { headers: { Referer: url } });
         const iframeHtml = await iframeRes.text();
 
-        // 4. Extract media links from iframe HTML
+        // 4. Directly extract video/src
         let mediaLinks = soraExtractMediaFromHtml(iframeHtml);
 
-        // 5. Handle JS-obfuscation fallback (eval packed)
+        // 5. Check for sources hidden inside <script>
         if (mediaLinks.length === 0) {
-            const evalRegex = /eval\(function\(p,a,c,k,e,d\)[\s\S]+?\)\)/;
-            const evalCode = soraMatch(evalRegex, iframeHtml, 0);
-            if (evalCode) {
-                try {
-                    // unpack manually if needed
-                    const unpacked = eval(evalCode); // risky but works locally
-                    mediaLinks = soraExtractMediaFromHtml(unpacked);
-                } catch (err) {
-                    mediaLinks = [];
-                }
+            const scriptRegex = /file\s*:\s*"(https?:\/\/[^"]+)"/g;
+            let match;
+            while ((match = scriptRegex.exec(iframeHtml)) !== null) {
+                mediaLinks.push(match[1]);
             }
         }
 
-        // 6. Return valid results
+        // 6. Check for m3u8 playlist links
+        if (mediaLinks.length === 0) {
+            const m3u8Regex = /(https?:\/\/[^"']+\.m3u8[^"']*)/g;
+            let match;
+            while ((match = m3u8Regex.exec(iframeHtml)) !== null) {
+                mediaLinks.push(match[1]);
+            }
+        }
+
+        // 7. Return results
         if (mediaLinks.length > 0) {
             return JSON.stringify(mediaLinks.map(link => ({
                 server: "FaselHD",
@@ -211,18 +213,10 @@ async function extractStreamUrl(url) {
             })));
         }
 
-        // 7. Nothing found → fallback
-        return JSON.stringify([{ 
-            server: "FaselHD", 
-            quality: "Unknown", 
-            url: "fallbackUrl" 
-        }]);
+        // 8. Fallback
+        return JSON.stringify([{ server: "FaselHD", url: "fallbackUrl" }]);
 
     } catch (err) {
-        return JSON.stringify([{ 
-            server: "FaselHD", 
-            quality: "Error", 
-            url: "fallbackUrl" 
-        }]);
+        return JSON.stringify([{ server: "FaselHD", url: "fallbackUrl" }]);
     }
 }
