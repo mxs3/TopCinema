@@ -13,32 +13,31 @@ async function searchResults(keyword) {
         const encoded = encodeURIComponent(keyword.trim());
         const searchUrl = `${base}/search/${encoded}/`;
 
-        async function httpGet(u) {
-            const headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                "Accept": "text/html,application/xhtml+xml",
-                "Referer": base,
-                "X-Requested-With": "XMLHttpRequest"
-            };
-            if (typeof fetchv2 === "function") {
-                const res = await fetchv2(u, headers, "GET", null);
-                if (res && typeof res.text === "function") return await res.text();
-                if (typeof res === "string") return res;
-                return String(res);
-            } else {
-                const res = await fetch(u, { method: "GET", headers });
-                return await res.text();
-            }
+        const headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept": "text/html,application/xhtml+xml",
+            "Referer": base,
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "no-cache"
+        };
+
+        let html;
+        if (typeof fetchv2 === "function") {
+            html = await fetchv2(searchUrl, headers, "GET", null);
+        } else {
+            const res = await fetch(searchUrl, { method: "GET", headers });
+            html = await res.text();
         }
 
-        const html = await httpGet(searchUrl);
+        if (typeof html !== "string") {
+            html = await html.text();
+        }
 
-        // 🟢 فلترة على منطقة البحث فقط
-        const searchBlockMatch = html.match(/<section[^>]*class="search"[^>]*>([\s\S]*?)<\/section>/i);
+        // مسك بلوك البحث بس
+        const searchBlockMatch = html.match(/<section[^>]*class="secContainer"[^>]*>([\s\S]*?)<\/section>/i);
         const searchHtml = searchBlockMatch ? searchBlockMatch[1] : html;
 
-        // 🔥 استخراج النتائج من البلوك
-        const regex = /<a[^>]+href="([^"]+)"[^>]*>\s*<div[^>]*class="postThumb"[^>]*>\s*<img[^>]+(?:data-src|data-lazy|src)="([^"]+)"[^>]*>[\s\S]*?<h2[^>]*>([^<]+)<\/h2>/gi;
+        const regex = /<a[^>]+href="([^"]+)"[^>]*>\s*<div[^>]*class="postThumb"[^>]*>\s*<img[^>]+(?:data-src|src)="([^"]+)"[^>]*>[\s\S]*?<h2[^>]*>([^<]+)<\/h2>/gi;
 
         const results = [];
         let match;
