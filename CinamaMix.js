@@ -1,15 +1,21 @@
 async function searchResults(keyword) {
-    const query = keyword.replace(/[\u0600-\u06FF]/g, "").trim(); 
-    const url = `https://w.cinamamix.com/search/${encodeURIComponent(query)}/`;
+    const hasFetchV2 = typeof fetchv2 === "function";
+    async function httpGet(u, opts = {}) {
+        if (hasFetchV2) {
+            return await fetchv2(u, opts.headers || {}, "GET", null);
+        }
+        return await fetch(u, { method: "GET", headers: opts.headers || {} });
+    }
 
-    const response = await soraFetch(url);
+    const url = `https://w.cinamamix.com/search/${encodeURIComponent(keyword)}/`;
+    const response = await httpGet(url);
     const html = await response.text();
 
-    const regex = /<a[^>]+href="([^"]+)"[^>]*>\s*<div class="postThumb">\s*<img[^>]+src="([^"]+)"[^>]*>\s*<\/div>\s*<div class="postContent">[\s\S]*?<h2 class="postTitle">([^<]+)<\/h2>/g;
+    // 🔥 ريجيكس قوي بيجيب كل النتائج
+    const regex = /<a[^>]+href="([^"]+)"[^>]*>\s*<div class="postThumb">\s*<img[^>]+src="([^"]+)"[^>]*>[\s\S]*?<h2 class="postTitle">([^<]+)<\/h2>/g;
 
     const results = [];
     let match;
-
     while ((match = regex.exec(html)) !== null) {
         results.push({
             title: match[3].trim(),
