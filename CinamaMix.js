@@ -1,11 +1,14 @@
 async function searchResults(keyword) {
     function decodeHTMLEntities(text) {
         if (!text) return "";
-        text = text.replace(/&#x([0-9A-Fa-f]+);/g, (m, hex) => String.fromCharCode(parseInt(hex, 16)));
-        text = text.replace(/&#(\d+);/g, (m, dec) => String.fromCharCode(dec));
-        const entities = { '&quot;': '"', '&amp;': '&', '&apos;': "'", '&lt;': '<', '&gt;': '>' };
-        for (const e in entities) text = text.replace(new RegExp(e, 'g'), entities[e]);
-        return text;
+        return text
+            .replace(/&#x([0-9A-Fa-f]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+            .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(dec))
+            .replace(/&quot;/g, '"')
+            .replace(/&amp;/g, '&')
+            .replace(/&apos;/g, "'")
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>');
     }
 
     try {
@@ -14,11 +17,12 @@ async function searchResults(keyword) {
         const searchUrl = `${base}/search/${encoded}/`;
 
         const headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept": "text/html,application/xhtml+xml",
-            "Referer": base,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Cache-Control": "no-cache"
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Referer": base
         };
 
         let html;
@@ -29,19 +33,12 @@ async function searchResults(keyword) {
             html = await res.text();
         }
 
-        if (typeof html !== "string") {
-            html = await html.text();
-        }
-
-        // مسك بلوك البحث بس
-        const searchBlockMatch = html.match(/<section[^>]*class="secContainer"[^>]*>([\s\S]*?)<\/section>/i);
-        const searchHtml = searchBlockMatch ? searchBlockMatch[1] : html;
-
+        // ريجيكس غصب عنها يلم كل حاجة: الرابط + الصورة + العنوان
         const regex = /<a[^>]+href="([^"]+)"[^>]*>\s*<div[^>]*class="postThumb"[^>]*>\s*<img[^>]+(?:data-src|src)="([^"]+)"[^>]*>[\s\S]*?<h2[^>]*>([^<]+)<\/h2>/gi;
 
         const results = [];
         let match;
-        while ((match = regex.exec(searchHtml)) !== null) {
+        while ((match = regex.exec(html)) !== null) {
             results.push({
                 title: decodeHTMLEntities(match[3].trim()),
                 image: match[2].trim(),
