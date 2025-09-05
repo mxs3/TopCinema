@@ -11,7 +11,7 @@
     "quality": "1080p",
     "baseUrl": "https://www.faselhds.xyz/",
     "searchBaseUrl": "https://www.faselhds.xyz/?s=%s",
-    "scriptUrl": "https://raw.githubusercontent.com/mxs3/FaselHd/refs/heads/main/faselhd.js",
+    "scriptUrl": "https://raw.githubusercontent.com/mxs3/FaselHd/refs/heads/main/CinamaMix.js",
     "type": "shows/movies/anime",
     "asyncJS": true,
     "downloadSupport": true
