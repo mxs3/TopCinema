@@ -10,15 +10,15 @@ async function searchResults(keyword) {
 
     try {
         const base = "https://w.cinamamix.com";
-        const cleaned = (keyword || "").replace(/[\u0600-\u06FF]/g, "").trim();
-        if (!cleaned) return JSON.stringify([{ title: "No results", image: "", href: "" }]);
-        const encoded = encodeURIComponent(cleaned);
+        const encoded = encodeURIComponent(keyword.trim());
         const searchUrl = `${base}/search/${encoded}/`;
 
         async function httpGet(u) {
             const headers = {
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "text/html"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Accept": "text/html,application/xhtml+xml",
+                "Referer": base,
+                "X-Requested-With": "XMLHttpRequest"
             };
             if (typeof fetchv2 === "function") {
                 const res = await fetchv2(u, headers, "GET", null);
@@ -32,39 +32,22 @@ async function searchResults(keyword) {
         }
 
         const html = await httpGet(searchUrl);
-        if (!html || html.length < 50) {
-            return JSON.stringify([{ title: "No results found", image: "", href: "" }]);
-        }
 
-        // 🔥 استخرج فقط البلوكات الخاصة بالأفلام/الأنمي
-        const blockRegex = /<div[^>]+class="[^"]*(MovieBlock|PostBlock)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+        // 🟢 فلترة على منطقة البحث فقط
+        const searchBlockMatch = html.match(/<section[^>]*class="search"[^>]*>([\s\S]*?)<\/section>/i);
+        const searchHtml = searchBlockMatch ? searchBlockMatch[1] : html;
+
+        // 🔥 استخراج النتائج من البلوك
+        const regex = /<a[^>]+href="([^"]+)"[^>]*>\s*<div[^>]*class="postThumb"[^>]*>\s*<img[^>]+(?:data-src|data-lazy|src)="([^"]+)"[^>]*>[\s\S]*?<h2[^>]*>([^<]+)<\/h2>/gi;
+
         const results = [];
         let match;
-
-        while ((match = blockRegex.exec(html)) !== null) {
-            const block = match[2];
-
-            // الرابط
-            const hrefMatch = block.match(/<a[^>]+href="([^"]+)"/i);
-            const href = hrefMatch ? hrefMatch[1] : "";
-
-            // الصورة (بوستر)
-            const imgMatch = block.match(/<img[^>]+(?:src|data-src)="([^"]+)"/i);
-            const image = imgMatch ? imgMatch[1] : "";
-
-            // العنوان
-            let title = "";
-            const titleMatch = block.match(/<h2[^>]*>([^<]+)<\/h2>/i) || block.match(/<h3[^>]*>([^<]+)<\/h3>/i);
-            if (titleMatch) title = titleMatch[1];
-            if (!title) {
-                const altMatch = block.match(/<img[^>]+alt="([^"]+)"/i);
-                if (altMatch) title = altMatch[1];
-            }
-
-            title = decodeHTMLEntities(title).trim();
-            if (href && image && title) {
-                results.push({ title, image, href });
-            }
+        while ((match = regex.exec(searchHtml)) !== null) {
+            results.push({
+                title: decodeHTMLEntities(match[3].trim()),
+                image: match[2].trim(),
+                href: match[1].trim()
+            });
         }
 
         if (results.length === 0) {
