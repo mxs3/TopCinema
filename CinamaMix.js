@@ -1,40 +1,55 @@
 async function searchResults(keyword) {
-    const uniqueResults = new Map();
+    try {
+        const baseUrl = "https://w.cinamamix.com";
 
-    // 🟢 تنظيف الكلمة من العربي
-    let cleanedKeyword = keyword.replace(/[\u0600-\u06FF]/g, "").trim();
-    if (!cleanedKeyword) {
-        return JSON.stringify([{ title: "No results", image: "", href: "" }]);
-    }
+        // 🟢 شيل أي حروف عربية
+        let cleanedKeyword = keyword.replace(/[\u0600-\u06FF]/g, "").trim();
+        if (!cleanedKeyword) {
+            return JSON.stringify([{ title: "No results", image: "", href: "" }]);
+        }
 
-    const baseUrl = "https://w.cinamamix.com";
-    const url = `${baseUrl}/?s=${encodeURIComponent(cleanedKeyword)}`;
-    const response = await soraFetch(url);
-    const html = await response.text();
+        const searchUrl = `${baseUrl}/?s=${encodeURIComponent(cleanedKeyword)}`;
 
-    // 🟢 Regex: يجيب (href + image + title)
-    const regex = /<a[^>]+href="([^"]+)"[^>]*class="hover"[^>]*>\s*<img[^>]+src="([^"]+)"[^>]*alt="([^"]+)"/g;
+        // 🟢 جلب الصفحة
+        const hasFetchV2 = typeof fetchv2 === "function";
+        async function httpGet(u) {
+            if (hasFetchV2) return await fetchv2(u, {}, "GET");
+            return await fetch(u).then(r => r.text());
+        }
 
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-        const rawTitle = match[3].trim();
+        const html = await httpGet(searchUrl);
 
-        // 🟢 تنظيف العنوان من "الحلقة" والأرقام والكلمات الزائدة
-        const cleanedTitle = rawTitle
-            .replace(/الحلقة\s*\d+(\.\d+)?(-\d+)?/gi, "")
-            .replace(/والاخيرة/gi, "")
-            .replace(/\s+/g, " ")
-            .trim();
+        // 🟢 Regex قوي يلقط كل البوسترات واللينكات والعناوين
+        // بيدور على <a ... href="..." ...><img src="..." alt="..." />
+        const regex = /<a[^>]+href="([^"]+)"[^>]*>\s*<img[^>]+(?:src|data-src)="([^"]+)"[^>]+alt="([^"]+)"/g;
 
-        if (!uniqueResults.has(cleanedTitle)) {
-            uniqueResults.set(cleanedTitle, {
-                title: cleanedTitle,
-                href: match[1].trim(),
-                image: match[2].trim()
+        const results = [];
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+            const rawTitle = match[3].trim();
+
+            // 🟢 تنظيف العنوان
+            const cleanedTitle = rawTitle
+                .replace(/الحلقة\s*\d+(\.\d+)?(-\d+)?/gi, "")
+                .replace(/والاخيرة/gi, "")
+                .replace(/\s+/g, " ")
+                .trim();
+
+            results.push({
+                title: cleanedTitle || rawTitle,
+                image: match[2].trim(),
+                href: match[1].trim()
             });
         }
-    }
 
-    const deduplicated = Array.from(uniqueResults.values());
-    return JSON.stringify(deduplicated.length > 0 ? deduplicated : [{ title: "No results found", image: "", href: "" }]);
+        if (results.length === 0) {
+            return JSON.stringify([{ title: "No results found", image: "", href: "" }]);
+        }
+
+        return JSON.stringify(results);
+
+    } catch (error) {
+        console.log("Search error:", error);
+        return JSON.stringify([{ title: "Error", image: "", href: "" }]);
+    }
 }
