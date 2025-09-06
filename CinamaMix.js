@@ -31,13 +31,3 @@ async function searchResults(keyword) {
     return JSON.stringify([{ title: "Error", image: "", href: "" }]);
   }
 }
-
-function decodeHTMLEntities(text) {
-  return text
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(dec))
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
-}
