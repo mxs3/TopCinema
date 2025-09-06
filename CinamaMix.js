@@ -1,7 +1,7 @@
 async function searchResults(keyword) {
   try {
     const base = "https://w.cinamamix.com";
-    const url = `${base}/search/${encodeURIComponent(keyword)}/`;
+    const url = `${base}/?s=${encodeURIComponent(keyword)}`;
     const headers = { "User-Agent": "Mozilla/5.0" };
 
     const html = typeof fetchv2 === "function"
