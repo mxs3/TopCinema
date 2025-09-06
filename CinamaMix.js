@@ -1,3 +1,42 @@
+// الدوال المساعدة أولاً (تقدر تضعها في الأسفل إذا تحب الترتيب)
+
+// دالة جلب الصفحة - تدعم fetchv2
+async function soraFetch(url, options = { headers: {}, method: "GET", body: null, encoding: "utf-8" }) {
+  try {
+    if (typeof fetchv2 === "function") {
+      return await fetchv2(
+        url,
+        options.headers ?? {},
+        options.method ?? "GET",
+        options.body ?? null,
+        true,
+        options.encoding ?? "utf-8"
+      );
+    }
+    const res = await fetch(url, { method: options.method ?? "GET", headers: options.headers ?? {}, body: options.body ?? null });
+    return await res.text();
+  } catch (e) {
+    return null;
+  }
+}
+
+// دالة فك ترميز HTML
+function decodeHTMLEntities(text) {
+  text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
+  const entities = {
+    "&quot;": '"',
+    "&amp;": "&",
+    "&apos;": "'",
+    "&lt;": "<",
+    "&gt;": ">"
+  };
+  for (const entity in entities) {
+    text = text.replace(new RegExp(entity, "g"), entities[entity]);
+  }
+  return text;
+}
+
+// دالة البحث الأساسية
 async function searchResults(keyword) {
   try {
     const base = "https://w.cinamamix.com";
@@ -10,7 +49,7 @@ async function searchResults(keyword) {
       return JSON.stringify([{ title: "Error: no response", image: "", href: "" }]);
     }
 
-    // === تحديث الريجيكس ليتوافق مع الشكل الجديد ===
+    // الريجيكس المحدث حسب عينة HTML
     const regex =
       /<article[^>]*?class="[^"]*?post[^"]*?"[^>]*?>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*?>[\s\S]*?<img[^>]+data-img="([^"]+)"[^>]*?>[\s\S]*?<h3[^>]*class="title"[^>]*>(.*?)<\/h3>/gi;
 
