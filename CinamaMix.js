@@ -1,6 +1,3 @@
-// الدوال المساعدة أولاً (تقدر تضعها في الأسفل إذا تحب الترتيب)
-
-// دالة جلب الصفحة - تدعم fetchv2
 async function soraFetch(url, options = { headers: {}, method: "GET", body: null, encoding: "utf-8" }) {
   try {
     if (typeof fetchv2 === "function") {
@@ -20,7 +17,6 @@ async function soraFetch(url, options = { headers: {}, method: "GET", body: null
   }
 }
 
-// دالة فك ترميز HTML
 function decodeHTMLEntities(text) {
   text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
   const entities = {
@@ -36,7 +32,6 @@ function decodeHTMLEntities(text) {
   return text;
 }
 
-// دالة البحث الأساسية
 async function searchResults(keyword) {
   try {
     const base = "https://w.cinamamix.com";
@@ -49,7 +44,9 @@ async function searchResults(keyword) {
       return JSON.stringify([{ title: "Error: no response", image: "", href: "" }]);
     }
 
-    // الريجيكس المحدث حسب عينة HTML
+    // اطبع جزء من الـ HTML للتشخيص
+    console.log(html.slice(0, 1000));
+
     const regex =
       /<article[^>]*?class="[^"]*?post[^"]*?"[^>]*?>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*?>[\s\S]*?<img[^>]+data-img="([^"]+)"[^>]*?>[\s\S]*?<h3[^>]*class="title"[^>]*>(.*?)<\/h3>/gi;
 
