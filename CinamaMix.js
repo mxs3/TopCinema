@@ -15,8 +15,8 @@ async function searchResults(keyword) {
         html = await res.text();
     }
 
-    // 🔥 regex قوي يجيب اللينك + الصورة + العنوان
-    const regex = /<a[^>]+href="([^"]+)"[^>]*>\s*<div[^>]*postThumb[^>]*>\s*<img[^>]+(?:data-src|src)="([^"]+)"[^>]*>[\s\S]*?<h2[^>]*>([^<]+)<\/h2>/gi;
+    // 🔥 Regex قوي يجيب اللينك + الصورة + العنوان
+    const regex = /<article class="post">[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<div class="poster">[\s\S]*?<img[^>]+(?:data-img|src)="([^"]+)"[^>]*>[\s\S]*?<h3 class="title">\s*([^<]+)\s*<\/h3>/gi;
 
     const results = [];
     let match;
