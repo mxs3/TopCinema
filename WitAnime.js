@@ -29,20 +29,16 @@ async function searchResults(keyword) {
 
     const results = [];
 
-    // تقسيم الصفحة على كل بطاقة أنمي حسب الكلاس الحالي
-    const blocks = html.split('class="thumb"'); // thumb غالبًا يحيط بالأنمي
-    for (const block of blocks) {
-      const hrefMatch = block.match(/<a[^>]+href="([^"]+)"/);       // الرابط
-      const imgMatch = block.match(/<img[^>]+src="([^"]+)"/);      // الصورة
-      const titleMatch = block.match(/<h3[^>]*>\s*<a[^>]*>([^<]+)<\/a>/); // العنوان
+    // regex حديثة لالتقاط كل بطاقة أنمي
+    const animeRegex = /<div class="anime-block">[\s\S]*?<a href="([^"]+)">[\s\S]*?<img[^>]+src="([^"]+)"[^>]*>[\s\S]*?<h3[^>]*>\s*<a[^>]*>([^<]+)<\/a>/g;
 
-      if (hrefMatch && imgMatch && titleMatch) {
-        results.push({
-          title: decodeHTMLEntities(titleMatch[1].trim()),
-          href: hrefMatch[1],
-          image: imgMatch[1]
-        });
-      }
+    let match;
+    while ((match = animeRegex.exec(html)) !== null) {
+      results.push({
+        title: decodeHTMLEntities(match[3].trim()),
+        href: match[1],
+        image: match[2]
+      });
     }
 
     if (results.length === 0) {
@@ -53,22 +49,4 @@ async function searchResults(keyword) {
   } catch (err) {
     return JSON.stringify([{ title: 'Error', href: '', image: '', error: err.message }]);
   }
-}
-
-function decodeHTMLEntities(text) {
-    text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
-
-    const entities = {
-        '&quot;': '"',
-        '&amp;': '&',
-        '&apos;': "'",
-        '&lt;': '<',
-        '&gt;': '>'
-    };
-
-    for (const entity in entities) {
-        text = text.replace(new RegExp(entity, 'g'), entities[entity]);
-    }
-
-    return text;
 }
