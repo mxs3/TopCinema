@@ -1,16 +1,16 @@
 async function searchResults(keyword) {
   try {
-    const url = `https://witanime.today/?s=${encodeURIComponent(keyword)}`;
+    const url = `https://witanime.world/?search_param=animes&s=${encodeURIComponent(keyword)}`;
     const res = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://witanime.today/'
+        'Referer': 'https://witanime.world/'
       }
     });
     const html = await res.text();
 
     const results = [];
-    const blocks = html.split('anime-card'); // الجزء اللي يحتوي على كل كارت أنمي
+    const blocks = html.split('anime-card'); // كل بطاقة أنمي
     for (const block of blocks) {
       const hrefMatch = block.match(/<a href="([^"]+)"/); // رابط الأنمي
       const imgMatch = block.match(/<img[^>]+src="([^"]+)"[^>]*>/); // صورة الغلاف
