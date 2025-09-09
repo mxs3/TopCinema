@@ -1,69 +1,54 @@
-async function soraFetch(url, options = { headers: {}, method: "GET", body: null, encoding: "utf-8" }) {
+async function searchResults(keyword) {
   try {
-    if (typeof fetchv2 === "function") {
-      return await fetchv2(
-        url,
-        options.headers ?? {},
-        options.method ?? "GET",
-        options.body ?? null,
-        true,
-        options.encoding ?? "utf-8"
-      );
+    const url = `https://witanime.today/?s=${encodeURIComponent(keyword)}`;
+    const res = await fetchv2(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://witanime.today/'
+      }
+    });
+    const html = await res.text();
+
+    const results = [];
+    const blocks = html.split('anime-card'); // الجزء اللي يحتوي على كل كارت أنمي
+    for (const block of blocks) {
+      const hrefMatch = block.match(/<a href="([^"]+)"/); // رابط الأنمي
+      const imgMatch = block.match(/<img[^>]+src="([^"]+)"[^>]*>/); // صورة الغلاف
+      const titleMatch = block.match(/<h3[^>]*>\s*<a[^>]*>([^<]+)<\/a>/); // عنوان الأنمي
+
+      if (hrefMatch && imgMatch && titleMatch) {
+        results.push({
+          title: decodeHTMLEntities(titleMatch[1]),
+          href: hrefMatch[1],
+          image: imgMatch[1]
+        });
+      }
     }
-    const res = await fetch(url, { method: options.method ?? "GET", headers: options.headers ?? {}, body: options.body ?? null });
-    return await res.text();
-  } catch (e) {
-    return null;
+
+    if (results.length === 0) {
+      return JSON.stringify([{ title: 'No results found', href: '', image: '' }]);
+    }
+
+    return JSON.stringify(results);
+  } catch (err) {
+    return JSON.stringify([{ title: 'Error', href: '', image: '', error: err.message }]);
   }
 }
 
 function decodeHTMLEntities(text) {
-  text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
-  const entities = {
-    "&quot;": '"',
-    "&amp;": "&",
-    "&apos;": "'",
-    "&lt;": "<",
-    "&gt;": ">"
-  };
-  for (const entity in entities) {
-    text = text.replace(new RegExp(entity, "g"), entities[entity]);
-  }
-  return text;
-}
+    text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
 
-async function searchResults(keyword) {
-  try {
-    const base = "https://w.cinamamix.com";
-    const url = `${base}/?s=${encodeURIComponent(keyword)}`;
-    const headers = { "User-Agent": "Mozilla/5.0" };
+    const entities = {
+        '&quot;': '"',
+        '&amp;': '&',
+        '&apos;': "'",
+        '&lt;': '<',
+        '&gt;': '>'
+    };
 
-    const html = await soraFetch(url, { headers });
-
-    if (!html) {
-      return JSON.stringify([{ title: "Error: no response", image: "", href: "" }]);
+    for (const entity in entities) {
+        text = text.replace(new RegExp(entity, 'g'), entities[entity]);
     }
 
-    // اطبع جزء من الـ HTML للتشخيص
-    console.log(html.slice(0, 1000));
-
-    const regex =
-      /<article[^>]*?class="[^"]*?post[^"]*?"[^>]*?>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*?>[\s\S]*?<img[^>]+data-img="([^"]+)"[^>]*?>[\s\S]*?<h3[^>]*class="title"[^>]*>(.*?)<\/h3>/gi;
-
-    const results = [];
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-      results.push({
-        title: decodeHTMLEntities(match[3].trim()),
-        image: match[2].trim(),
-        href: match[1].trim()
-      });
-    }
-
-    return results.length
-      ? JSON.stringify(results)
-      : JSON.stringify([{ title: "No results", image: "", href: "" }]);
-  } catch (e) {
-    return JSON.stringify([{ title: "Error", image: "", href: "" }]);
-  }
+    return text;
 }
