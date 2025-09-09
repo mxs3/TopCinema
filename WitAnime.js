@@ -1,3 +1,21 @@
+function decodeHTMLEntities(text) {
+    text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
+
+    const entities = {
+        '&quot;': '"',
+        '&amp;': '&',
+        '&apos;': "'",
+        '&lt;': '<',
+        '&gt;': '>'
+    };
+
+    for (const entity in entities) {
+        text = text.replace(new RegExp(entity, 'g'), entities[entity]);
+    }
+
+    return text;
+}
+
 async function searchResults(keyword) {
   try {
     const url = `https://witanime.world/?search_param=animes&s=${encodeURIComponent(keyword)}`;
@@ -11,19 +29,12 @@ async function searchResults(keyword) {
 
     const results = [];
 
-    // استخدام regex لاستخراج كل بطاقة أنمي
-    const blockRegex = /<div class="item">(.*?)<\/div>\s*<\/div>/gs;
-    const blocks = [...html.matchAll(blockRegex)];
-
+    // تقسيم الصفحة على كل بطاقة أنمي حسب الكلاس الحالي
+    const blocks = html.split('class="thumb"'); // thumb غالبًا يحيط بالأنمي
     for (const block of blocks) {
-      const content = block[1];
-
-      // استخراج الرابط
-      const hrefMatch = content.match(/<a[^>]+href="([^"]+)"/);
-      // استخراج الصورة
-      const imgMatch = content.match(/<img[^>]+src="([^"]+)"/);
-      // استخراج العنوان
-      const titleMatch = content.match(/<h3[^>]*>\s*<a[^>]*>([^<]+)<\/a>/);
+      const hrefMatch = block.match(/<a[^>]+href="([^"]+)"/);       // الرابط
+      const imgMatch = block.match(/<img[^>]+src="([^"]+)"/);      // الصورة
+      const titleMatch = block.match(/<h3[^>]*>\s*<a[^>]*>([^<]+)<\/a>/); // العنوان
 
       if (hrefMatch && imgMatch && titleMatch) {
         results.push({
