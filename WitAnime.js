@@ -10,10 +10,13 @@ async function searchResults(keyword) {
     const html = await res.text();
 
     const results = [];
-    const blocks = html.split('<div class="anime-card">');
+    const blocks = html.split('<div class="anime-card">'); // كل بطاقة أنمي
     for (const block of blocks) {
-      const hrefMatch = block.match(/<a href="([^"]+)"/);
-      const imgMatch = block.match(/<img[^>]+src="([^"]+)"[^>]*>/);
+      // الرابط الرئيسي للأنمي
+      const hrefMatch = block.match(/<a[^>]+class="anime-link"[^>]+href="([^"]+)"/);
+      // صورة الغلاف
+      const imgMatch = block.match(/<img[^>]+class="anime-thumbnail"[^>]+src="([^"]+)"/);
+      // عنوان الأنمي
       const titleMatch = block.match(/<h3[^>]*>\s*<a[^>]*>([^<]+)<\/a>/);
 
       if (hrefMatch && imgMatch && titleMatch) {
