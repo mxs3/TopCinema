@@ -10,18 +10,24 @@ async function searchResults(keyword) {
     const html = await res.text();
 
     const results = [];
-    const blocks = html.split('<div class="anime-card">'); // كل بطاقة أنمي
+
+    // استخدام regex لاستخراج كل بطاقة أنمي
+    const blockRegex = /<div class="item">(.*?)<\/div>\s*<\/div>/gs;
+    const blocks = [...html.matchAll(blockRegex)];
+
     for (const block of blocks) {
-      // الرابط الرئيسي للأنمي
-      const hrefMatch = block.match(/<a[^>]+class="anime-link"[^>]+href="([^"]+)"/);
-      // صورة الغلاف
-      const imgMatch = block.match(/<img[^>]+class="anime-thumbnail"[^>]+src="([^"]+)"/);
-      // عنوان الأنمي
-      const titleMatch = block.match(/<h3[^>]*>\s*<a[^>]*>([^<]+)<\/a>/);
+      const content = block[1];
+
+      // استخراج الرابط
+      const hrefMatch = content.match(/<a[^>]+href="([^"]+)"/);
+      // استخراج الصورة
+      const imgMatch = content.match(/<img[^>]+src="([^"]+)"/);
+      // استخراج العنوان
+      const titleMatch = content.match(/<h3[^>]*>\s*<a[^>]*>([^<]+)<\/a>/);
 
       if (hrefMatch && imgMatch && titleMatch) {
         results.push({
-          title: decodeHTMLEntities(titleMatch[1]),
+          title: decodeHTMLEntities(titleMatch[1].trim()),
           href: hrefMatch[1],
           image: imgMatch[1]
         });
