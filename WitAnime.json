@@ -11,7 +11,7 @@
     "quality": "Auto",
     "baseUrl": "https://witanime.today/",
     "searchBaseUrl": "https://witanime.today/?s=%s",
-    "scriptUrl": "https://raw.githubusercontent.com/MostafaElsanea/sora-modules/main/WitAnime.js",
+    "scriptUrl": "https://raw.githubusercontent.com/mxs3/witAnime/refs/heads/main/WitAnime.js",
     "type": "Anime",
     "asyncJS": true
 }
