@@ -114,7 +114,7 @@ async function extractEpisodes(url) {
     const firstHtml = await getPage(url);
     if (!firstHtml) return JSON.stringify([]);
 
-    // تحديد أقصى عدد صفحات (لو الأنمي طويل)
+    // تحديد أقصى عدد صفحات
     const maxPage = Math.max(
       1,
       ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1])
@@ -127,18 +127,17 @@ async function extractEpisodes(url) {
       )
     );
 
-    // Map لتجنب التكرار
     const episodesMap = new Map();
 
-    // ريجيكس مخصص لويت انمي
-    const linkRegex = /<a[^>]+href="([^"]+\/episode\/[^"]+)"[^>]*>(.*?)<\/a>/gi;
+    // ريجيكس خاص ببلوك الحلقات
+    const linkRegex = /<div class="episodes-card-title">\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
     const numRegex = /(?:الحلقة|Episode|Ep)\s*(\d+)/i;
 
     for (const html of pages) {
       let m;
       while ((m = linkRegex.exec(html))) {
         const href = m[1].trim();
-        const text = m[2].trim().replace(/<[^>]+>/g, ""); // تنظيف النص
+        const text = m[2].trim().replace(/<[^>]+>/g, "");
         const numMatch = text.match(numRegex);
 
         if (!href) continue;
@@ -148,17 +147,15 @@ async function extractEpisodes(url) {
         if (!episodesMap.has(href)) {
           episodesMap.set(href, {
             href,
-            number
+            number,
+            title: text
           });
         }
       }
     }
 
-    // تحويل الـ Map لـ Array
-    const unique = Array.from(episodesMap.values());
-
-    // ترتيب حسب رقم الحلقة
-    unique.sort((a, b) => {
+    // ترتيب الحلقات
+    const unique = Array.from(episodesMap.values()).sort((a, b) => {
       if (a.number == null) return 1;
       if (b.number == null) return -1;
       return a.number - b.number;
