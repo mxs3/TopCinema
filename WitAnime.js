@@ -18,7 +18,7 @@ function decodeHTMLEntities(text) {
 
 async function searchResults(keyword) {
   try {
-    const url = `https://witanime.world/?search_param=animes&s=${encodeURIComponent(keyword)}`;
+    const url = `https://witanime.xyz/?search_param=animes&s=${encodeURIComponent(keyword)}`;
     const res = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
@@ -28,17 +28,20 @@ async function searchResults(keyword) {
     const html = await res.text();
 
     const results = [];
+    const blocks = html.split('anime-card-container');
 
-    // regex حديثة لالتقاط كل بطاقة أنمي
-    const animeRegex = /<div class="anime-block">[\s\S]*?<a href="([^"]+)">[\s\S]*?<img[^>]+src="([^"]+)"[^>]*>[\s\S]*?<h3[^>]*>\s*<a[^>]*>([^<]+)<\/a>/g;
+    for (const block of blocks) {
+      const hrefMatch = block.match(/<h3>\s*<a href="([^"]+)">/);
+      const imgMatch = block.match(/<img[^>]+src="([^"]+)"/);
+      const titleMatch = block.match(/<h3>\s*<a[^>]*>([^<]+)<\/a>/);
 
-    let match;
-    while ((match = animeRegex.exec(html)) !== null) {
-      results.push({
-        title: decodeHTMLEntities(match[3].trim()),
-        href: match[1],
-        image: match[2]
-      });
+      if (hrefMatch && imgMatch && titleMatch) {
+        results.push({
+          title: decodeHTMLEntities(titleMatch[1].trim()),
+          href: hrefMatch[1],
+          image: imgMatch[1]
+        });
+      }
     }
 
     if (results.length === 0) {
