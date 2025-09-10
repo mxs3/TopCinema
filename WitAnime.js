@@ -38,47 +38,49 @@ async function searchResults(keyword) {
 
 async function extractDetails(url) {
   try {
-    const res = await fetchv2(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://witanime.xyz'
-      }
-    });
-    const html = await res.text();
+    // جلب الصفحة
+    const response = await fetchv2(url);
+    const html = await response.text();
 
-    // الوصف
+    // القيم الافتراضية
     let description = "لا يوجد وصف متاح.";
-    const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
-    if (descMatch) {
-      description = descMatch[1].trim();
-    }
-
-    // الأنواع / aliases
     let aliases = "غير مصنف";
+    let airdate = "غير معروف";
+
+    // استخراج الوصف
+    const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
+    if (descMatch) description = descMatch[1].trim();
+
+    // استخراج الأنواع / التصنيفات
     const genresMatch = html.match(/<ul class="anime-genres">([\s\S]*?)<\/ul>/i);
     if (genresMatch) {
-      const items = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
-      if (items.length) aliases = items.map(m => m[1].trim()).join(", ");
+      const genreItems = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
+      const genres = genreItems.map(m => m[1].trim());
+      if (genres.length > 0) aliases = genres.join(", ");
     }
 
-    // سنة العرض / airdate
-    let airdate = "غير معروف";
+    // استخراج سنة العرض
     const airdateMatch = html.match(/<span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
     if (airdateMatch) airdate = airdateMatch[1].trim();
 
-    // نرجع JSON Stringified بالشكل المطلوب
-    return JSON.stringify({
-      description,
-      aliases,
-      airdate
-    });
+    // إرجاع البيانات بالنموذج المطلوب
+    return JSON.stringify([
+      {
+        description,
+        aliases,
+        airdate: `سنة العرض: ${airdate}`
+      }
+    ]);
 
   } catch (err) {
-    return JSON.stringify({
-      description: "تعذر تحميل الوصف.",
-      aliases: "غير مصنف",
-      airdate: "غير معروف"
-    });
+    // لو حصل أي خطأ
+    return JSON.stringify([
+      {
+        description: "تعذر تحميل الوصف.",
+        aliases: "غير مصنف",
+        airdate: "سنة العرض: غير معروفة"
+      }
+    ]);
   }
 }
 
