@@ -49,14 +49,16 @@ async function extractDetails(url) {
     // الوصف
     let description = "لا يوجد وصف متاح.";
     const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
-    if (descMatch) description = decodeHTMLEntities(descMatch[1].trim());
+    if (descMatch) {
+      description = descMatch[1].replace(/^\s+|\s+$/g, '');
+    }
 
     // الأنواع / aliases
     let aliases = "غير مصنف";
     const genresMatch = html.match(/<ul class="anime-genres">([\s\S]*?)<\/ul>/i);
     if (genresMatch) {
       const items = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
-      if (items.length) aliases = items.map(m => decodeHTMLEntities(m[1].trim())).join(", ");
+      if (items.length) aliases = items.map(m => m[1].trim()).join(", ");
     }
 
     // سنة العرض / airdate
