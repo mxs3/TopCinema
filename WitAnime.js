@@ -55,39 +55,52 @@ async function searchResults(keyword) {
 }
 
 async function extractDetails(url) {
-    try {
-        const res = await fetchv2(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0',
-                'Referer': 'https://witanime.xyz/'
-            }
-        });
-        const html = await res.text();
+  try {
+    const response = await fetchv2(url);
+    const html = await response.text();
+    let description = "لا يوجد وصف متاح.";
+    let airdate = "غير معروف";
+    let aliases = "غير مصنف";
 
-        // الوصف
-        const descriptionMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/);
-        const description = descriptionMatch ? descriptionMatch[1].trim() : 'No description available';
-
-        // مدة الحلقة وعدد الحلقات كمعلومات إضافية في aliases
-        const durationMatch = html.match(/<div class="anime-info"><span>مدة الحلقة:<\/span>\s*([^<]+)<\/div>/);
-        const episodesMatch = html.match(/<div class="anime-info"><span>عدد الحلقات:<\/span>\s*([^<]+)<\/div>/);
-        const aliases = `Duration: ${durationMatch ? durationMatch[1].trim() : 'Unknown'} | Episodes: ${episodesMatch ? episodesMatch[1].trim() : 'Unknown'}`;
-
-        // تاريخ العرض
-        const airdateMatch = html.match(/<div class="anime-info"><span>بداية العرض:<\/span>\s*([^<]+)<\/div>/);
-        const airdate = `Aired: ${airdateMatch ? airdateMatch[1].trim() : 'Unknown'}`;
-
-        return JSON.stringify({
-            description,
-            aliases,
-            airdate
-        });
-    } catch (err) {
-        console.log('Details error:', err);
-        return JSON.stringify({
-            description: 'Error loading description',
-            aliases: 'Duration: Unknown | Episodes: Unknown',
-            airdate: 'Aired: Unknown'
-        });
+    const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
+    if (descMatch) {
+      const rawDescription = descMatch[1].trim();
+      if (rawDescription.length > 0) {
+        description = decodeHTMLEntities(rawDescription);
+      }
     }
+
+    const genresMatch = html.match(/<ul class="anime-genres">([\s\S]*?)<\/ul>/i);
+    if (genresMatch) {
+      const genreItems = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
+      const genres = genreItems.map(m => decodeHTMLEntities(m[1].trim()));
+      if (genres.length > 0) {
+        aliases = genres.join(", ");
+      }
+    }
+
+    const airdateMatch = html.match(/<span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
+    if (airdateMatch) {
+      const extracted = airdateMatch[1].trim();
+      if (/^\d{4}$/.test(extracted)) {
+        airdate = extracted;
+      }
+    }
+
+    return JSON.stringify([
+      {
+        description,
+        aliases,
+        airdate: `سنة العرض: ${airdate}`
+      }
+    ]);
+  } catch {
+    return JSON.stringify([
+      {
+        description: "تعذر تحميل الوصف.",
+        aliases: "غير مصنف",
+        airdate: "سنة العرض: غير معروفة"
+      }
+    ]);
+  }
 }
