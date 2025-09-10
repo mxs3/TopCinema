@@ -38,56 +38,50 @@ async function searchResults(keyword) {
 
 async function extractDetails(url) {
   try {
-    const response = await fetchv2(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://witanime.xyz/'
-      }
-    });
+    const response = await fetchv2(url);
     const html = await response.text();
 
-    // ==== استخراج الوصف ====
     let description = "لا يوجد وصف متاح.";
-    const descMatch = html.match(/<p[^>]*class=["']?anime-story["']?[^>]*>([\s\S]*?)<\/p>/i);
-    if (descMatch) {
-      description = descMatch[1]
-        .replace(/<br\s*\/?>/gi, '\n')  // تحويل <br> إلى سطر جديد
-        .replace(/<[^>]+>/g, '')       // إزالة أي وسم HTML متبقي
-        .trim();
-    }
-
-    // ==== استخراج التصنيف (الأنواع) ====
-    let aliases = "غير مصنف";
-    const genresMatch = html.match(/<ul[^>]*class=["']?anime-genres["']?[^>]*>([\s\S]*?)<\/ul>/i);
-    if (genresMatch) {
-      const genreItems = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/gi)];
-      const genres = genreItems.map(m => m[1].trim()).filter(Boolean);
-      if (genres.length > 0) aliases = genres.join(", ");
-    }
-
-    // ==== استخراج سنة العرض ====
     let airdate = "غير معروف";
-    const airdateMatch = html.match(/بداية العرض[:\s]*<\/span>\s*(\d{4})/i);
-    if (airdateMatch) airdate = airdateMatch[1].trim();
+    let aliases = "غير مصنف";
 
-    // ==== نموذج الخرج النهائي ====
-    return JSON.stringify([
+    // ====== الوصف ======
+    const descMatch = html.match(/<div[^>]*class=["']anime-story["'][^>]*>\s*<p>(.*?)<\/p>/s);
+    if (descMatch) {
+      description = descMatch[1].replace(/<\/?[^>]+>/g, "").trim();
+    }
+
+    // ====== التصنيفات ======
+    const genresMatch = [...html.matchAll(/<div[^>]*class=["']anime-genres["'][^>]*>.*?<a[^>]*>(.*?)<\/a>/gs)];
+    if (genresMatch.length > 0) {
+      aliases = genresMatch.map(m => m[1].trim()).join(", ");
+    }
+
+    // ====== سنة العرض ======
+    const yearMatch = html.match(/<span[^>]*class=["']anime-date["'][^>]*>(\d{4})<\/span>/);
+    if (yearMatch) {
+      airdate = `سنة العرض: ${yearMatch[1]}`;
+    }
+
+    // ====== إرجاع MediaItem زي فور أب ======
+    return [
       {
+        id: generateUUID(),        // سورا بيحتاج UUID لكل MediaItem
         description,
         aliases,
-        airdate: airdate !== "غير معروف" ? `سنة العرض: ${airdate}` : undefined
+        airdate
       }
-    ]);
+    ];
 
   } catch (err) {
-    return JSON.stringify([
+    return [
       {
-        description: "تعذر تحميل الوصف.",
+        id: generateUUID(),
+        description: "فشل في جلب البيانات.",
         aliases: "غير مصنف",
-        airdate: "سنة العرض: غير معروفة",
-        error: err.message
+        airdate: "غير معروف"
       }
-    ]);
+    ];
   }
 }
 
