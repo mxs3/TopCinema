@@ -41,7 +41,7 @@ async function extractDetails(url) {
     const response = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://witanime.world/'
+        'Referer': 'https://witanime.xyz/'
       }
     });
     const html = await response.text();
