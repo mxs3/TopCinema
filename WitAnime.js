@@ -50,7 +50,7 @@ async function extractDetails(url) {
     let description = "لا يوجد وصف متاح.";
     const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
     if (descMatch) {
-      description = descMatch[1].replace(/^\s+|\s+$/g, '');
+      description = descMatch[1].trim();
     }
 
     // الأنواع / aliases
@@ -66,32 +66,36 @@ async function extractDetails(url) {
     const airdateMatch = html.match(/<span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
     if (airdateMatch) airdate = airdateMatch[1].trim();
 
-    return JSON.stringify([
-      {
-        description,
-        aliases,
-        airdate: `سنة العرض: ${airdate}`
-      }
-    ]);
+    // نرجع JSON Stringified بالشكل المطلوب
+    return JSON.stringify({
+      description,
+      aliases,
+      airdate
+    });
+
   } catch (err) {
-    return JSON.stringify([
-      {
-        description: "تعذر تحميل الوصف.",
-        aliases: "غير مصنف",
-        airdate: "سنة العرض: غير معروفة"
-      }
-    ]);
+    return JSON.stringify({
+      description: "تعذر تحميل الوصف.",
+      aliases: "غير مصنف",
+      airdate: "غير معروف"
+    });
   }
 }
 
-// دالة مساعدة لفك الترميزات HTML
 function decodeHTMLEntities(text) {
-  const entities = {
-    '&amp;': '&',
-    '&lt;': '<',
-    '&gt;': '>',
-    '&quot;': '"',
-    '&#39;': "'"
-  };
-  return text.replace(/&[a-zA-Z0-9#]+;/g, match => entities[match] || match);
+    text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
+
+    const entities = {
+        '&quot;': '"',
+        '&amp;': '&',
+        '&apos;': "'",
+        '&lt;': '<',
+        '&gt;': '>'
+    };
+
+    for (const entity in entities) {
+        text = text.replace(new RegExp(entity, 'g'), entities[entity]);
+    }
+
+    return text;
 }
