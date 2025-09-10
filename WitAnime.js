@@ -105,23 +105,69 @@ async function extractDetails(url) {
 // ===== استخراج الحلقات =====
 async function extractEpisodes(url) {
   try {
-    const response = await fetchv2(url);
-    const html = await response.text();
-
-    let episodes = [];
-
-    // الحلقات داخل DivEpisodesList
-    const episodesMatch = html.match(/<div[^>]*id=["']DivEpisodesList["'][^>]*>([\s\S]*?)<\/div>/i);
-    if (episodesMatch) {
-      const items = [...episodesMatch[1].matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/g)];
-      episodes = items.map(m => ({
-        name: decodeHTMLEntities(m[2].trim()),
-        url: m[1].trim()
-      }));
+    async function getPage(u) {
+      const res = await fetchv2(u);
+      if (!res) return "";
+      return await res.text();
     }
 
-    return JSON.stringify(episodes);
-  } catch {
+    const firstHtml = await getPage(url);
+    if (!firstHtml) return JSON.stringify([]);
+
+    // تحديد أقصى عدد صفحات (لو الأنمي طويل)
+    const maxPage = Math.max(
+      1,
+      ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1])
+    );
+
+    // تحميل كل الصفحات
+    const pages = await Promise.all(
+      Array.from({ length: maxPage }, (_, i) =>
+        getPage(i ? `${url.replace(/\/$/, "")}/page/${i + 1}/` : url)
+      )
+    );
+
+    // Map لتجنب التكرار
+    const episodesMap = new Map();
+
+    // ريجيكس مخصص لويت انمي
+    const linkRegex = /<a[^>]+href="([^"]+\/episode\/[^"]+)"[^>]*>(.*?)<\/a>/gi;
+    const numRegex = /(?:الحلقة|Episode|Ep)\s*(\d+)/i;
+
+    for (const html of pages) {
+      let m;
+      while ((m = linkRegex.exec(html))) {
+        const href = m[1].trim();
+        const text = m[2].trim().replace(/<[^>]+>/g, ""); // تنظيف النص
+        const numMatch = text.match(numRegex);
+
+        if (!href) continue;
+
+        let number = numMatch ? parseInt(numMatch[1]) : null;
+
+        if (!episodesMap.has(href)) {
+          episodesMap.set(href, {
+            href,
+            number
+          });
+        }
+      }
+    }
+
+    // تحويل الـ Map لـ Array
+    const unique = Array.from(episodesMap.values());
+
+    // ترتيب حسب رقم الحلقة
+    unique.sort((a, b) => {
+      if (a.number == null) return 1;
+      if (b.number == null) return -1;
+      return a.number - b.number;
+    });
+
+    return JSON.stringify(unique);
+
+  } catch (error) {
+    console.log("Fetch error:", error);
     return JSON.stringify([]);
   }
 }
