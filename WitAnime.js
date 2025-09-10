@@ -38,21 +38,22 @@ async function searchResults(keyword) {
 
 async function extractDetails(url) {
   try {
-    // جلب الصفحة
-    const response = await fetchv2(url);
+    const response = await fetchv2(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://witanime.world/'
+      }
+    });
     const html = await response.text();
 
-    // القيم الافتراضية
-    let description = "لا يوجد وصف متاح.";
-    let aliases = "غير مصنف";
-    let airdate = "غير معروف";
-
     // استخراج الوصف
-    const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
-    if (descMatch) description = descMatch[1].trim();
+    let description = "لا يوجد وصف متاح.";
+    const descMatch = html.match(/<p[^>]*class="anime-story"[^>]*>([\s\S]*?)<\/p>/i);
+    if (descMatch) description = descMatch[1].replace(/<br\s*\/?>/g, '\n').trim();
 
-    // استخراج الأنواع / التصنيفات
-    const genresMatch = html.match(/<ul class="anime-genres">([\s\S]*?)<\/ul>/i);
+    // استخراج التصنيفات (الأنواع)
+    let aliases = "غير مصنف";
+    const genresMatch = html.match(/<ul[^>]*class="anime-genres"[^>]*>([\s\S]*?)<\/ul>/i);
     if (genresMatch) {
       const genreItems = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
       const genres = genreItems.map(m => m[1].trim());
@@ -60,25 +61,37 @@ async function extractDetails(url) {
     }
 
     // استخراج سنة العرض
+    let airdate = "غير معروف";
     const airdateMatch = html.match(/<span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
     if (airdateMatch) airdate = airdateMatch[1].trim();
 
-    // إرجاع البيانات بالنموذج المطلوب
+    // استخراج عدد الحلقات (اختياري)
+    let episodes = "";
+    const episodesMatch = html.match(/<span>\s*عدد الحلقات:\s*<\/span>([^<]*)/i);
+    if (episodesMatch) episodes = episodesMatch[1].trim();
+
+    // استخراج الموسم (اختياري)
+    let season = "";
+    const seasonMatch = html.match(/<span>\s*الموسم:\s*<\/span>\s*<a[^>]*>([^<]+)<\/a>/i);
+    if (seasonMatch) season = seasonMatch[1].trim();
+
+    // بناء النموذج النهائي
     return JSON.stringify([
       {
         description,
         aliases,
-        airdate: `سنة العرض: ${airdate}`
+        airdate: `سنة العرض: ${airdate}`,
+        episodes: episodes ? `عدد الحلقات: ${episodes}` : undefined,
+        season: season ? `الموسم: ${season}` : undefined
       }
     ]);
-
   } catch (err) {
-    // لو حصل أي خطأ
     return JSON.stringify([
       {
         description: "تعذر تحميل الوصف.",
         aliases: "غير مصنف",
-        airdate: "سنة العرض: غير معروفة"
+        airdate: "سنة العرض: غير معروفة",
+        error: err.message
       }
     ]);
   }
