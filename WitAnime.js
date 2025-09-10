@@ -111,76 +111,87 @@ async function extractEpisodes(url) {
       return await res.text();
     }
 
-    const firstHtml = await getPage(url);
-    if (!firstHtml) return JSON.stringify([]);
+    const html = await getPage(url);
+    if (!html) return JSON.stringify([]);
 
-    // تحديد أقصى عدد صفحات (لو فيه)
-    const maxPage = Math.max(
-      1,
-      ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1])
-    );
+    const episodes = [];
 
-    // تحميل كل الصفحات
-    const pages = await Promise.all(
-      Array.from({ length: maxPage }, (_, i) =>
-        getPage(i ? `${url.replace(/\/$/, "")}/page/${i + 1}/` : url)
-      )
-    );
-
-    const episodesMap = new Map();
-    const numRegex = /(?:الحلقة|Episode|Ep)\s*(\d+)/i;
-
-    for (const html of pages) {
-      let m;
-
-      // ✅ النظام الجديد (onclick + Base64)
-      const base64Regex = /<a[^>]+onclick="openEpisode\('([^']+)'\)"[^>]*>(.*?)<\/a>/gi;
-      while ((m = base64Regex.exec(html))) {
-        const encoded = m[1].trim();
-        const text = m[2].trim().replace(/<[^>]+>/g, "");
-
-        let href = "";
-        try {
-          href = atob(encoded);
-        } catch {
-          href = "";
-        }
-        if (!href) continue;
-
-        const numMatch = text.match(numRegex);
-        const number = numMatch ? parseInt(numMatch[1]) : null;
-
-        if (!episodesMap.has(href)) {
-          episodesMap.set(href, { href, number, title: text });
-        }
+    // --- 1. استخراج onclick="openEpisode('base64')"
+    const onclickRegex = /onclick="openEpisode\('([^']+)'\)[^"]*"\s*[^>]*>(.*?)<\/a>/gi;
+    let match;
+    while ((match = onclickRegex.exec(html))) {
+      const encoded = match[1].trim();
+      const title = match[2].replace(/<[^>]+>/g, "").trim();
+      let href = "";
+      try {
+        href = atob(encoded); // فك base64
+      } catch (e) {
+        href = encoded;
       }
+      episodes.push({ href, title });
+    }
 
-      // ✅ fallback للنظام القديم (لو في a عادي)
-      const linkRegex = /<a[^>]+href="([^"]+episode[^"]+)"[^>]*>(.*?)<\/a>/gi;
-      while ((m = linkRegex.exec(html))) {
-        const href = m[1].trim();
-        const text = m[2].trim().replace(/<[^>]+>/g, "");
-        const numMatch = text.match(numRegex);
+    // --- 2. روابط عادية /episode/
+    const linkRegex = /<a[^>]+href="([^"]*\/episode\/[^"]+)"[^>]*>(.*?)<\/a>/gi;
+    while ((match = linkRegex.exec(html))) {
+      const href = match[1].trim();
+      const title = match[2].replace(/<[^>]+>/g, "").trim();
+      if (!episodes.find(ep => ep.href === href)) {
+        episodes.push({ href, title });
+      }
+    }
 
-        const number = numMatch ? parseInt(numMatch[1]) : null;
+    // --- 3. Fallback: API extraction
+    if (episodes.length === 0) {
+      const idMatch = html.match(/data-id=["'](\d+)["']/);
+      if (idMatch) {
+        const animeId = idMatch[1];
+        const apiUrl = `${url.replace(/\/$/, "")}/wp-admin/admin-ajax.php`;
 
-        if (!episodesMap.has(href)) {
-          episodesMap.set(href, { href, number, title: text });
+        const formData = new URLSearchParams();
+        formData.append("action", "getEpisodes");
+        formData.append("id", animeId);
+
+        const res = await fetchv2(apiUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          },
+          body: formData.toString(),
+        });
+
+        const jsonText = await res.text();
+        try {
+          const json = JSON.parse(jsonText);
+          if (Array.isArray(json)) {
+            json.forEach(ep => {
+              episodes.push({
+                href: ep.url || ep.link || "",
+                title: ep.title || `الحلقة ${ep.number || ""}`,
+              });
+            });
+          }
+        } catch (e) {
+          console.log("API not JSON, maybe HTML fallback:", e);
         }
       }
     }
 
-    // ترتيب الحلقات
-    const unique = Array.from(episodesMap.values()).sort((a, b) => {
-      if (a.number == null) return 1;
-      if (b.number == null) return -1;
-      return a.number - b.number;
+    // --- 4. ترتيب الحلقات بالأرقام لو متاحة
+    const numRegex = /(\d+)/;
+    const unique = Array.from(
+      new Map(episodes.map(ep => [ep.href, ep])).values()
+    ).sort((a, b) => {
+      const numA = (a.title.match(numRegex) || [])[1];
+      const numB = (b.title.match(numRegex) || [])[1];
+      if (!numA) return 1;
+      if (!numB) return -1;
+      return parseInt(numA) - parseInt(numB);
     });
 
     return JSON.stringify(unique);
-
   } catch (error) {
-    console.log("extractEpisodes error:", error);
+    console.log("Fetch error:", error);
     return JSON.stringify([]);
   }
 }
