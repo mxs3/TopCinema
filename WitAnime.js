@@ -114,7 +114,7 @@ async function extractEpisodes(url) {
     const firstHtml = await getPage(url);
     if (!firstHtml) return JSON.stringify([]);
 
-    // تحديد أقصى عدد صفحات
+    // تحديد أقصى عدد صفحات (لو فيه)
     const maxPage = Math.max(
       1,
       ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1])
@@ -128,28 +128,44 @@ async function extractEpisodes(url) {
     );
 
     const episodesMap = new Map();
-
-    // ريجيكس خاص ببلوك الحلقات
-    const linkRegex = /<div class="episodes-card-title">\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
     const numRegex = /(?:الحلقة|Episode|Ep)\s*(\d+)/i;
 
     for (const html of pages) {
       let m;
+
+      // ✅ النظام الجديد (onclick + Base64)
+      const base64Regex = /<a[^>]+onclick="openEpisode\('([^']+)'\)"[^>]*>(.*?)<\/a>/gi;
+      while ((m = base64Regex.exec(html))) {
+        const encoded = m[1].trim();
+        const text = m[2].trim().replace(/<[^>]+>/g, "");
+
+        let href = "";
+        try {
+          href = atob(encoded);
+        } catch {
+          href = "";
+        }
+        if (!href) continue;
+
+        const numMatch = text.match(numRegex);
+        const number = numMatch ? parseInt(numMatch[1]) : null;
+
+        if (!episodesMap.has(href)) {
+          episodesMap.set(href, { href, number, title: text });
+        }
+      }
+
+      // ✅ fallback للنظام القديم (لو في a عادي)
+      const linkRegex = /<a[^>]+href="([^"]+episode[^"]+)"[^>]*>(.*?)<\/a>/gi;
       while ((m = linkRegex.exec(html))) {
         const href = m[1].trim();
         const text = m[2].trim().replace(/<[^>]+>/g, "");
         const numMatch = text.match(numRegex);
 
-        if (!href) continue;
-
-        let number = numMatch ? parseInt(numMatch[1]) : null;
+        const number = numMatch ? parseInt(numMatch[1]) : null;
 
         if (!episodesMap.has(href)) {
-          episodesMap.set(href, {
-            href,
-            number,
-            title: text
-          });
+          episodesMap.set(href, { href, number, title: text });
         }
       }
     }
@@ -164,7 +180,7 @@ async function extractEpisodes(url) {
     return JSON.stringify(unique);
 
   } catch (error) {
-    console.log("Fetch error:", error);
+    console.log("extractEpisodes error:", error);
     return JSON.stringify([]);
   }
 }
