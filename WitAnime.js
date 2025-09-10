@@ -1,21 +1,3 @@
-function decodeHTMLEntities(text) {
-    text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
-
-    const entities = {
-        '&quot;': '"',
-        '&amp;': '&',
-        '&apos;': "'",
-        '&lt;': '<',
-        '&gt;': '>'
-    };
-
-    for (const entity in entities) {
-        text = text.replace(new RegExp(entity, 'g'), entities[entity]);
-    }
-
-    return text;
-}
-
 async function searchResults(keyword) {
   try {
     const url = `https://witanime.xyz/?search_param=animes&s=${encodeURIComponent(keyword)}`;
@@ -56,24 +38,28 @@ async function searchResults(keyword) {
 
 async function extractDetails(url) {
   try {
-    const res = await fetchv2(url, {
+    // جلب صفحة الأنمي
+    const response = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
         'Referer': 'https://witanime.xyz/'
       }
     });
-    const html = await res.text();
+    const html = await response.text();
 
-    // الوصف
+    // القيم الافتراضية
     let description = "لا يوجد وصف متاح.";
+    let aliases = "غير مصنف";
+    let airdate = "غير معروف";
+
+    // استخراج الوصف
     const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
     if (descMatch) {
       const rawDescription = descMatch[1].trim();
       if (rawDescription.length > 0) description = decodeHTMLEntities(rawDescription);
     }
 
-    // الأنواع / genres → aliases
-    let aliases = "غير مصنف";
+    // استخراج الأنواع كـ aliases
     const genresMatch = html.match(/<ul class="anime-genres">([\s\S]*?)<\/ul>/i);
     if (genresMatch) {
       const genreItems = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
@@ -81,13 +67,11 @@ async function extractDetails(url) {
       if (genres.length > 0) aliases = genres.join(", ");
     }
 
-    // سنة العرض → airdate
-    let airdate = "غير معروف";
+    // استخراج سنة العرض
     const airdateMatch = html.match(/<div class="anime-info"><span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
-    if (airdateMatch) {
-      airdate = airdateMatch[1].trim();
-    }
+    if (airdateMatch) airdate = airdateMatch[1].trim();
 
+    // إرجاع النتائج بنفس النموذج
     return JSON.stringify([
       {
         description,
@@ -96,13 +80,33 @@ async function extractDetails(url) {
       }
     ]);
   } catch (err) {
-    console.log("extractDetails error:", err);
+    // معالجة الأخطاء
     return JSON.stringify([
       {
         description: "تعذر تحميل الوصف.",
         aliases: "غير مصنف",
-        airdate: "سنة العرض: غير معروفة"
+        airdate: "سنة العرض: غير معروفة",
+        error: err.message
       }
     ]);
   }
+}
+
+// دالة مساعدة لفك رموز HTML
+function decodeHTMLEntities(text) {
+    text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
+
+    const entities = {
+        '&quot;': '"',
+        '&amp;': '&',
+        '&apos;': "'",
+        '&lt;': '<',
+        '&gt;': '>'
+    };
+
+    for (const entity in entities) {
+        text = text.replace(new RegExp(entity, 'g'), entities[entity]);
+    }
+
+    return text;
 }
