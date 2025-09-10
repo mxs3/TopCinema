@@ -105,88 +105,63 @@ async function extractDetails(url) {
 // ===== استخراج الحلقات =====
 async function extractEpisodes(url) {
   try {
+    // 🔹 Helper لجلب الصفحة
     async function getPage(u) {
       const res = await fetchv2(u);
       if (!res) return "";
       return await res.text();
     }
 
+    // 🔹 هات أول صفحة
     const firstHtml = await getPage(url);
     if (!firstHtml) return JSON.stringify([]);
 
-    // 🔹 تحديد أقصى عدد صفحات
+    // 🔹 شوف لو فيه صفحات تانية (/page/2/, /page/3/ ...)
     const maxPage = Math.max(
       1,
-      ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => +m[1])
+      ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1]))
     );
 
-    // 🔹 تحميل كل الصفحات
+    // 🔹 هات كل الصفحات
     const pages = await Promise.all(
       Array.from({ length: maxPage }, (_, i) =>
         getPage(i ? `${url.replace(/\/$/, "")}/page/${i + 1}/` : url)
       )
     );
 
-    const episodesMap = new Map();
-    const numRegex = /(?:الحلقة|Episode|Ep)\s*(\d+)/i;
+    // 🔹 نخزن الحلقات
+    const episodes = [];
 
-    // 🔹 Regexات مختلفة عشان نضمن التقاط الروابط
-    const regexes = [
-      /<div class="episodes-card-title">\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/gi,
-      /<a[^>]+href="([^"]*\/episode\/[^"]+)"[^>]*>(.*?)<\/a>/gi,
-      /onclick="[^"]*?loadIframe[^"]*?,\s*'([^']+)'/gi
-    ];
+    // 🔹 Regex غشيم يجيب أي لينك فيه كلمة episode
+    const linkRegex = /<a[^>]+href="([^"]*\/episode\/[^"]+)"[^>]*>(.*?)<\/a>/gi;
 
     for (const html of pages) {
-      for (const re of regexes) {
-        let m;
-        while ((m = re.exec(html))) {
-          const href = m[1].trim();
-          let text = m[2] ? m[2].trim().replace(/<[^>]+>/g, "") : "";
-
-          let number = null;
-          const numMatch = text.match(numRegex);
-          if (numMatch) {
-            number = parseInt(numMatch[1]);
-          } else {
-            // fallback: جرب تستخرج الرقم من الرابط
-            const linkMatch = href.match(/episode\/(\d+)/i);
-            if (linkMatch) number = parseInt(linkMatch[1]);
-          }
-
-          if (href && !episodesMap.has(href)) {
-            episodesMap.set(href, {
-              href,
-              number,
-              title: text || `Episode ${number || ""}`
-            });
-          }
-        }
+      let m;
+      while ((m = linkRegex.exec(html))) {
+        const href = m[1].trim();
+        if (!href) continue;
+        episodes.push(href);
       }
     }
 
-    // 🔹 ترتيب الحلقات
-    const unique = Array.from(episodesMap.values()).sort((a, b) => {
-      if (a.number == null) return 1;
-      if (b.number == null) return -1;
-      return a.number - b.number;
-    });
+    // 🔹 نشيل التكرار
+    const unique = [...new Set(episodes)];
 
-    // 🔹 الإخراج بصيغة مطلوبة (href + number فقط)
-    return JSON.stringify(
-      unique.map(ep => ({
-        href: ep.href,
-        number: ep.number
-      }))
-    );
+    // 🔹 نرقمهم غصب عنهم
+    const finalEpisodes = unique.map((href, i) => ({
+      href,
+      number: i + 1
+    }));
+
+    return JSON.stringify(finalEpisodes);
 
   } catch (error) {
-    console.log("Fetch error:", error);
+    console.log("Episode extraction error:", error);
     return JSON.stringify([]);
   }
 }
 
-// ===== سورا فيتش =====
+// !!!! ===== سورا فيتش =====!!!!
 async function soraFetch(url, options = { headers: {}, method: 'GET', body: null }) {
     try {
         return await fetchv2(url, options.headers ?? {}, options.method ?? 'GET', options.body ?? null);
