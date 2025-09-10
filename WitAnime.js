@@ -38,40 +38,32 @@ async function searchResults(keyword) {
 
 async function extractDetails(url) {
   try {
-    // جلب صفحة الأنمي
-    const response = await fetchv2(url, {
+    const res = await fetchv2(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://witanime.xyz/'
+        'Referer': 'https://witanime.xyz'
       }
     });
-    const html = await response.text();
+    const html = await res.text();
 
-    // القيم الافتراضية
+    // الوصف
     let description = "لا يوجد وصف متاح.";
-    let aliases = "غير مصنف";
-    let airdate = "غير معروف";
-
-    // استخراج الوصف
     const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
-    if (descMatch) {
-      const rawDescription = descMatch[1].trim();
-      if (rawDescription.length > 0) description = decodeHTMLEntities(rawDescription);
-    }
+    if (descMatch) description = decodeHTMLEntities(descMatch[1].trim());
 
-    // استخراج الأنواع كـ aliases
+    // الأنواع / aliases
+    let aliases = "غير مصنف";
     const genresMatch = html.match(/<ul class="anime-genres">([\s\S]*?)<\/ul>/i);
     if (genresMatch) {
-      const genreItems = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
-      const genres = genreItems.map(m => decodeHTMLEntities(m[1].trim()));
-      if (genres.length > 0) aliases = genres.join(", ");
+      const items = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
+      if (items.length) aliases = items.map(m => decodeHTMLEntities(m[1].trim())).join(", ");
     }
 
-    // استخراج سنة العرض
-    const airdateMatch = html.match(/<div class="anime-info"><span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
+    // سنة العرض / airdate
+    let airdate = "غير معروف";
+    const airdateMatch = html.match(/<span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
     if (airdateMatch) airdate = airdateMatch[1].trim();
 
-    // إرجاع النتائج بنفس النموذج
     return JSON.stringify([
       {
         description,
@@ -80,33 +72,24 @@ async function extractDetails(url) {
       }
     ]);
   } catch (err) {
-    // معالجة الأخطاء
     return JSON.stringify([
       {
         description: "تعذر تحميل الوصف.",
         aliases: "غير مصنف",
-        airdate: "سنة العرض: غير معروفة",
-        error: err.message
+        airdate: "سنة العرض: غير معروفة"
       }
     ]);
   }
 }
 
-// دالة مساعدة لفك رموز HTML
+// دالة مساعدة لفك الترميزات HTML
 function decodeHTMLEntities(text) {
-    text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
-
-    const entities = {
-        '&quot;': '"',
-        '&amp;': '&',
-        '&apos;': "'",
-        '&lt;': '<',
-        '&gt;': '>'
-    };
-
-    for (const entity in entities) {
-        text = text.replace(new RegExp(entity, 'g'), entities[entity]);
-    }
-
-    return text;
+  const entities = {
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&#39;': "'"
+  };
+  return text.replace(/&[a-zA-Z0-9#]+;/g, match => entities[match] || match);
 }
