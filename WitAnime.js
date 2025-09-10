@@ -53,3 +53,41 @@ async function searchResults(keyword) {
     return JSON.stringify([{ title: 'Error', href: '', image: '', error: err.message }]);
   }
 }
+
+async function extractDetails(url) {
+    try {
+        const res = await fetchv2(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0',
+                'Referer': 'https://witanime.xyz/'
+            }
+        });
+        const html = await res.text();
+
+        // الوصف
+        const descriptionMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/);
+        const description = descriptionMatch ? descriptionMatch[1].trim() : 'No description available';
+
+        // مدة الحلقة وعدد الحلقات كمعلومات إضافية في aliases
+        const durationMatch = html.match(/<div class="anime-info"><span>مدة الحلقة:<\/span>\s*([^<]+)<\/div>/);
+        const episodesMatch = html.match(/<div class="anime-info"><span>عدد الحلقات:<\/span>\s*([^<]+)<\/div>/);
+        const aliases = `Duration: ${durationMatch ? durationMatch[1].trim() : 'Unknown'} | Episodes: ${episodesMatch ? episodesMatch[1].trim() : 'Unknown'}`;
+
+        // تاريخ العرض
+        const airdateMatch = html.match(/<div class="anime-info"><span>بداية العرض:<\/span>\s*([^<]+)<\/div>/);
+        const airdate = `Aired: ${airdateMatch ? airdateMatch[1].trim() : 'Unknown'}`;
+
+        return JSON.stringify({
+            description,
+            aliases,
+            airdate
+        });
+    } catch (err) {
+        console.log('Details error:', err);
+        return JSON.stringify({
+            description: 'Error loading description',
+            aliases: 'Duration: Unknown | Episodes: Unknown',
+            airdate: 'Aired: Unknown'
+        });
+    }
+}
