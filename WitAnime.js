@@ -1,19 +1,12 @@
 function decodeHTMLEntities(text) {
-    text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec));
-
-    const entities = {
-        '&quot;': '"',
-        '&amp;': '&',
-        '&apos;': "'",
-        '&lt;': '<',
-        '&gt;': '>'
-    };
-
-    for (const entity in entities) {
-        text = text.replace(new RegExp(entity, 'g'), entities[entity]);
-    }
-
-    return text;
+  const entities = {
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&#039;': "'",
+  };
+  return text.replace(/&[a-zA-Z0-9#]+;/g, match => entities[match] || match);
 }
 
 async function searchResults(keyword) {
@@ -58,12 +51,13 @@ async function extractDetails(url) {
   try {
     const response = await fetchv2(url);
     const html = await response.text();
+
     let description = "لا يوجد وصف متاح.";
     let airdate = "غير معروف";
     let aliases = "غير مصنف";
 
     // الوصف
-    const descMatch = html.match(/<div[^>]*class=["']anime-story["'][^>]*>\s*<p>([\s\S]*?)<\/p>/i);
+    const descMatch = html.match(/<div[^>]*class=["']anime-story["'][^>]*>\s*<p>(.*?)<\/p>/s);
     if (descMatch) {
       const rawDescription = descMatch[1].trim();
       if (rawDescription.length > 0) {
@@ -82,7 +76,7 @@ async function extractDetails(url) {
     }
 
     // سنة العرض
-    const yearMatch = html.match(/<span[^>]*class=["']anime-date["'][^>]*>(\d{4})<\/span>/i);
+    const yearMatch = html.match(/<span[^>]*class=["']anime-date["'][^>]*>(\d{4})<\/span>/);
     if (yearMatch) {
       const extracted = yearMatch[1].trim();
       if (/^\d{4}$/.test(extracted)) {
@@ -105,5 +99,38 @@ async function extractDetails(url) {
         airdate: "سنة العرض: غير معروفة"
       }
     ]);
+  }
+}
+
+// ===== استخراج الحلقات =====
+async function extractEpisodes(url) {
+  try {
+    const response = await fetchv2(url);
+    const html = await response.text();
+
+    let episodes = [];
+
+    // نمط 1: ul class="episodes-links"
+    const listMatch = html.match(/<ul[^>]*class=["']episodes-links["'][^>]*>([\s\S]*?)<\/ul>/i);
+    if (listMatch) {
+      const items = [...listMatch[1].matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/g)];
+      episodes = items.map(m => ({
+        name: decodeHTMLEntities(m[2].trim()),
+        url: m[1].trim()
+      }));
+    }
+
+    // نمط 2: div class="episodes-card"
+    if (episodes.length === 0) {
+      const items = [...html.matchAll(/<div[^>]*class=["']episodes-card["'][^>]*>\s*<a[^>]*href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/g)];
+      episodes = items.map(m => ({
+        name: decodeHTMLEntities(m[2].trim()),
+        url: m[1].trim()
+      }));
+    }
+
+    return JSON.stringify(episodes);
+  } catch {
+    return JSON.stringify([]);
   }
 }
