@@ -105,56 +105,66 @@ async function extractDetails(url) {
 // ===== استخراج الحلقات =====
 async function extractEpisodes(url) {
   try {
-    // 🔹 Helper لجلب الصفحة
+    // Helper عشان نجيب الصفحة
     async function getPage(u) {
       const res = await fetchv2(u);
       if (!res) return "";
       return await res.text();
     }
 
-    // 🔹 هات أول صفحة
-    const firstHtml = await getPage(url);
-    if (!firstHtml) return JSON.stringify([]);
+    // هات الـ HTML
+    const html = await getPage(url);
+    if (!html) return JSON.stringify([]);
 
-    // 🔹 شوف لو فيه صفحات تانية (/page/2/, /page/3/ ...)
-    const maxPage = Math.max(
-      1,
-      ...[...firstHtml.matchAll(/\/page\/(\d+)\//g)].map(m => parseInt(m[1]))
-    );
+    const episodes = new Map();
 
-    // 🔹 هات كل الصفحات
-    const pages = await Promise.all(
-      Array.from({ length: maxPage }, (_, i) =>
-        getPage(i ? `${url.replace(/\/$/, "")}/page/${i + 1}/` : url)
-      )
-    );
+    // 1️⃣ هات أي لينك مباشر فيه /episode/
+    const linkRegex = /href="([^"]*\/episode\/[^"]+)"/gi;
+    let m;
+    while ((m = linkRegex.exec(html))) {
+      const href = m[1].trim();
+      if (href) episodes.set(href, href);
+    }
 
-    // 🔹 نخزن الحلقات
-    const episodes = [];
-
-    // 🔹 Regex غشيم يجيب أي لينك فيه كلمة episode
-    const linkRegex = /<a[^>]+href="([^"]*\/episode\/[^"]+)"[^>]*>(.*?)<\/a>/gi;
-
-    for (const html of pages) {
-      let m;
-      while ((m = linkRegex.exec(html))) {
-        const href = m[1].trim();
-        if (!href) continue;
-        episodes.push(href);
+    // 2️⃣ هات أي لينك جاي من openEpisode('base64')
+    const onclickRegex = /openEpisode\('([^']+)'\)/gi;
+    while ((m = onclickRegex.exec(html))) {
+      try {
+        const decoded = atob(m[1]); // نفك Base64
+        if (decoded.includes("/episode/")) {
+          episodes.set(decoded, decoded);
+        }
+      } catch (e) {
+        continue;
       }
     }
 
-    // 🔹 نشيل التكرار
-    const unique = [...new Set(episodes)];
+    // 3️⃣ غشيم زيادة: أي كلمة episode في الصفحة
+    const bruteRegex = /(https?:\/\/[^\s"'<>]+\/episode\/[^\s"'<>]+)/gi;
+    while ((m = bruteRegex.exec(html))) {
+      const href = m[1].trim();
+      if (href) episodes.set(href, href);
+    }
 
-    // 🔹 نرقمهم غصب عنهم
-    const finalEpisodes = unique.map((href, i) => ({
-      href,
-      number: i + 1
-    }));
+    // نرتبهم حسب الرقم اللي في العنوان (لو موجود)
+    const numRegex = /(\d+)(?=\/?$)/;
+    const finalEpisodes = Array.from(episodes.values())
+      .map(href => {
+        const numMatch = href.match(numRegex);
+        const number = numMatch ? parseInt(numMatch[1]) : null;
+        return { href, number };
+      })
+      .sort((a, b) => {
+        if (a.number == null) return 1;
+        if (b.number == null) return -1;
+        return a.number - b.number;
+      })
+      .map((ep, i) => ({
+        href: ep.href,
+        number: ep.number ?? i + 1
+      }));
 
     return JSON.stringify(finalEpisodes);
-
   } catch (error) {
     console.log("Episode extraction error:", error);
     return JSON.stringify([]);
