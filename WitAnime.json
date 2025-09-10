@@ -13,5 +13,6 @@
     "searchBaseUrl": "https://witanime.xyz/?s=%s",
     "scriptUrl": "https://raw.githubusercontent.com/mxs3/witAnime/refs/heads/main/WitAnime.js",
     "type": "Anime",
-    "asyncJS": true
+    "asyncJS": true,
+    "asyncStream": true
 }
