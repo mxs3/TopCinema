@@ -47,17 +47,17 @@ async function searchResults(keyword) {
   }
 }
 
+// ===== استخراج البيانات =====
 async function extractDetails(url) {
   try {
     const response = await fetchv2(url);
     const html = await response.text();
-
     let description = "لا يوجد وصف متاح.";
     let airdate = "غير معروف";
     let aliases = "غير مصنف";
 
-    // الوصف
-    const descMatch = html.match(/<div[^>]*class=["']anime-story["'][^>]*>\s*<p>(.*?)<\/p>/s);
+    // استخراج الوصف
+    const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
     if (descMatch) {
       const rawDescription = descMatch[1].trim();
       if (rawDescription.length > 0) {
@@ -65,8 +65,8 @@ async function extractDetails(url) {
       }
     }
 
-    // التصنيفات
-    const genresMatch = html.match(/<div[^>]*class=["']anime-genres["'][^>]*>([\s\S]*?)<\/div>/i);
+    // استخراج التصنيفات (Genres)
+    const genresMatch = html.match(/<ul class="anime-genres">([\s\S]*?)<\/ul>/i);
     if (genresMatch) {
       const genreItems = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
       const genres = genreItems.map(m => decodeHTMLEntities(m[1].trim()));
@@ -75,10 +75,10 @@ async function extractDetails(url) {
       }
     }
 
-    // سنة العرض
-    const yearMatch = html.match(/<span[^>]*class=["']anime-date["'][^>]*>(\d{4})<\/span>/);
-    if (yearMatch) {
-      const extracted = yearMatch[1].trim();
+    // استخراج سنة العرض
+    const airdateMatch = html.match(/<div class="anime-info"><span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
+    if (airdateMatch) {
+      const extracted = airdateMatch[1].trim();
       if (/^\d{4}$/.test(extracted)) {
         airdate = extracted;
       }
@@ -110,19 +110,10 @@ async function extractEpisodes(url) {
 
     let episodes = [];
 
-    // نمط 1: ul class="episodes-links"
-    const listMatch = html.match(/<ul[^>]*class=["']episodes-links["'][^>]*>([\s\S]*?)<\/ul>/i);
-    if (listMatch) {
-      const items = [...listMatch[1].matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/g)];
-      episodes = items.map(m => ({
-        name: decodeHTMLEntities(m[2].trim()),
-        url: m[1].trim()
-      }));
-    }
-
-    // نمط 2: div class="episodes-card"
-    if (episodes.length === 0) {
-      const items = [...html.matchAll(/<div[^>]*class=["']episodes-card["'][^>]*>\s*<a[^>]*href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/g)];
+    // الحلقات داخل DivEpisodesList
+    const episodesMatch = html.match(/<div[^>]*id=["']DivEpisodesList["'][^>]*>([\s\S]*?)<\/div>/i);
+    if (episodesMatch) {
+      const items = [...episodesMatch[1].matchAll(/<a[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/g)];
       episodes = items.map(m => ({
         name: decodeHTMLEntities(m[2].trim()),
         url: m[1].trim()
