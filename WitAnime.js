@@ -56,35 +56,36 @@ async function searchResults(keyword) {
 
 async function extractDetails(url) {
   try {
-    const response = await fetchv2(url);
-    const html = await response.text();
-    let description = "لا يوجد وصف متاح.";
-    let airdate = "غير معروف";
-    let aliases = "غير مصنف";
+    const res = await fetchv2(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://witanime.xyz/'
+      }
+    });
+    const html = await res.text();
 
+    // الوصف
+    let description = "لا يوجد وصف متاح.";
     const descMatch = html.match(/<p class="anime-story">([\s\S]*?)<\/p>/i);
     if (descMatch) {
       const rawDescription = descMatch[1].trim();
-      if (rawDescription.length > 0) {
-        description = decodeHTMLEntities(rawDescription);
-      }
+      if (rawDescription.length > 0) description = decodeHTMLEntities(rawDescription);
     }
 
+    // الأنواع / genres → aliases
+    let aliases = "غير مصنف";
     const genresMatch = html.match(/<ul class="anime-genres">([\s\S]*?)<\/ul>/i);
     if (genresMatch) {
       const genreItems = [...genresMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)];
       const genres = genreItems.map(m => decodeHTMLEntities(m[1].trim()));
-      if (genres.length > 0) {
-        aliases = genres.join(", ");
-      }
+      if (genres.length > 0) aliases = genres.join(", ");
     }
 
-    const airdateMatch = html.match(/<span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
+    // سنة العرض → airdate
+    let airdate = "غير معروف";
+    const airdateMatch = html.match(/<div class="anime-info"><span>\s*بداية العرض:\s*<\/span>\s*(\d{4})/i);
     if (airdateMatch) {
-      const extracted = airdateMatch[1].trim();
-      if (/^\d{4}$/.test(extracted)) {
-        airdate = extracted;
-      }
+      airdate = airdateMatch[1].trim();
     }
 
     return JSON.stringify([
@@ -94,7 +95,8 @@ async function extractDetails(url) {
         airdate: `سنة العرض: ${airdate}`
       }
     ]);
-  } catch {
+  } catch (err) {
+    console.log("extractDetails error:", err);
     return JSON.stringify([
       {
         description: "تعذر تحميل الوصف.",
