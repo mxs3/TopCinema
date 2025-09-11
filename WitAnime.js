@@ -288,17 +288,26 @@ async function extractStreamUrl(url) {
   // دالة لاستخراج رابط الـ iframe بناءً على serverId
   async function extractIframeUrl(serverId, baseUrl) {
     try {
-      // افتراض: أنمي ويت بيستخدم endpoint مشابه لـ /ajax/server/<serverId>
-      const response = await httpGet(`${baseUrl}/ajax/server/${serverId}`, {
-        headers: { "User-Agent": "Mozilla/5.0", Referer: baseUrl, "X-Requested-With": "XMLHttpRequest" }
+      // endpoint لـ أنمي ويت، بناءً على هيكلية الموقع
+      const response = await httpGet(`https://witanime.world/ajax/server/${serverId}`, {
+        headers: { 
+          "User-Agent": "Mozilla/5.0", 
+          Referer: baseUrl, 
+          "X-Requested-With": "XMLHttpRequest",
+          "Accept": "application/json"
+        }
       });
       if (!response) {
         console.log(`Failed to load iframe for serverId ${serverId}`);
         return null;
       }
-      const data = await response.json(); // افتراض إن الرد JSON
+      const data = await response.json();
       const iframeUrl = data.url || data.embed || null;
-      return iframeUrl ? normalizeUrl(iframeUrl, baseUrl) : null;
+      if (!iframeUrl) {
+        console.log(`No iframe URL in response for serverId ${serverId}`);
+        return null;
+      }
+      return normalizeUrl(iframeUrl, baseUrl);
     } catch (e) {
       console.log(`Failed to load iframe for serverId ${serverId}:`, e);
       return null;
@@ -313,7 +322,7 @@ async function extractStreamUrl(url) {
       return JSON.stringify({ streams: [] });
     }
     const pageHtml = await pageRes.text();
-    console.log("Page HTML:", pageHtml);
+    console.log("Page HTML length:", pageHtml.length); // للتحقق من وجود محتوى
 
     const serverRe = /<a[^>]+data-server-id=["'](\d+)["'][^>]*>\s*(?:<span[^>]*>)?([^<]+)(?:<\/span>)?/gi;
     const servers = [];
@@ -336,6 +345,7 @@ async function extractStreamUrl(url) {
         console.log(`No iframe URL for server ${srv.title} (ID: ${srv.serverId})`);
         continue;
       }
+      console.log(`Iframe URL for ${srv.title}: ${iframeUrl}`);
       let data = null;
       if (/dailymotion/i.test(srv.title)) {
         data = await extractDailymotion(iframeUrl);
