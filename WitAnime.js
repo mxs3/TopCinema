@@ -102,7 +102,7 @@ async function extractDetails(url) {
   }
 }
 
-// ===== استخراج الحلقات =====
+//==== Made by 50/50 ====
 async function extractEpisodes(url) {
     const results = [];
 
