@@ -156,215 +156,103 @@ async function extractEpisodes(url) {
 // =========================================================================
 // ==== Sora stream ========================================================
 async function extractStreamUrl(url) {
-  // ==== Helper Functions ====
-  const hasFetchV2 = typeof fetchv2 === "function";
-
-  async function httpGet(u, opts = {}) {
-    try {
-      const response = hasFetchV2
-        ? await fetchv2(u, opts.headers || {}, opts.method || "GET", opts.body || null)
-        : await fetch(u, { method: opts.method || "GET", headers: opts.headers || {}, body: opts.body || null });
-      if (!response.ok) {
-        console.log(`HTTP request failed: ${response.status} ${response.statusText}`);
-        return null;
-      }
-      return response;
-    } catch (e) {
-      console.log(`HTTP request error for ${u}:`, e);
-      return null;
-    }
-  }
-
-  function safeTrim(s) { return s ? String(s).trim() : ""; }
-
-  function normalizeUrl(raw, base = "") {
-    if (!raw) return raw;
-    raw = safeTrim(raw);
-    if (raw.startsWith("//")) return "https:" + raw;
-    if (/^https?:\/\//i.test(raw)) return raw;
-    try { return base ? new URL(raw, base).href : "https://" + raw.replace(/^\/+/, ""); } catch { return raw; }
-  }
-
-  class Unbaser {
-    constructor(base) {
-      this.ALPHABET = { 62: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" };
-      this.dictionary = {};
-      this.base = base;
-      if (2 <= base && base <= 36) this.unbase = (value) => parseInt(value, base);
-      else [...this.ALPHABET[62]].forEach((c, i) => this.dictionary[c] = i), this.unbase = this._dictunbaser;
-    }
-    _dictunbaser(value) { return [...value].reverse().reduce((a, v, i) => a + Math.pow(this.base, i) * this.dictionary[v], 0); }
-  }
-
-  function unpack(source) {
-    const juicers = [/}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\)/];
-    let args;
-    for (const j of juicers) { const m = j.exec(source); if (m) { args = m; break; } }
-    if (!args) throw Error("Cannot parse p.a.c.k.e.r.");
-    const [payload, radix, count, symtab] = [args[1], parseInt(args[2]), parseInt(args[3]), args[4].split("|")];
-    const unbase = new Unbaser(radix);
-    const lookup = (w) => (radix == 1 ? symtab[parseInt(w)] : symtab[unbase.unbase(w)]) || w;
-    return payload.replace(/\b\w+\b/g, lookup);
-  }
-
-  // ==== Stream Extractors ====
-  async function extractStreamwish(iframeUrl, baseUrl) {
-    try {
-      const res = await httpGet(iframeUrl, { headers: { "User-Agent": "Mozilla/5.0", Referer: baseUrl } });
-      if (!res) {
-        console.log("Failed to fetch Streamwish iframe");
-        return null;
-      }
-      const html = await res.text();
-      const obf = html.match(/<script[^>]*>\s*(eval\(function\(p,a,c,k,e,d.*?\)[\s\S]*?)<\/script>/);
-      if (!obf) {
-        console.log("No packed script found for Streamwish");
-        return null;
-      }
-      const unpacked = unpack(obf[1]);
-      const m3u8 = unpacked.match(/file:"(https?:\/\/.*?\.m3u8.*?)"/);
-      if (!m3u8) {
-        console.log("No m3u8 link found in unpacked script");
-        return null;
-      }
-      return {
-        title: "Streamwish",
-        streamUrl: normalizeUrl(m3u8[1], baseUrl),
-        type: "hls",
-        headers: { Referer: iframeUrl, "User-Agent": "Mozilla/5.0" }
-      };
-    } catch (e) {
-      console.log("Streamwish extract error:", e);
-      return null;
-    }
-  }
-
-  async function extractDailymotion(iframeUrl) {
-    try {
-      let videoId = null;
-      const patterns = [
-        /dailymotion\.com\/video\/([a-zA-Z0-9]+)/,
-        /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/,
-        /[?&]video=([a-zA-Z0-9]+)/
-      ];
-      for (const p of patterns) { const m = iframeUrl.match(p); if (m) { videoId = m[1]; break; } }
-      if (!videoId) {
-        console.log("No video ID found for Dailymotion");
-        return null;
-      }
-      const meta = await (await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`)).json();
-      const hlsLink = meta.qualities?.auto?.[0]?.url;
-      if (!hlsLink) {
-        console.log("No HLS link found in Dailymotion metadata");
-        return null;
-      }
-      return { title: "Dailymotion", streamUrl: hlsLink, type: "hls", headers: { "User-Agent": "Mozilla/5.0" } };
-    } catch (e) {
-      console.log("Dailymotion extract error:", e);
-      return null;
-    }
-  }
-
-  async function extractVidea(iframeUrl) {
-    try {
-      const res = await httpGet(iframeUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-      if (!res) {
-        console.log("Failed to fetch Videa iframe");
-        return null;
-      }
-      const html = await res.text();
-      const match = html.match(/"videoUrl"\s*:\s*"([^"]+)"/i);
-      if (!match) {
-        console.log("No video URL found for Videa");
-        return null;
-      }
-      return { title: "Videa", streamUrl: match[1].replace(/\\\//g, "/"), type: "mp4", headers: { Referer: iframeUrl, "User-Agent": "Mozilla/5.0" } };
-    } catch (e) {
-      console.log("Videa extract error:", e);
-      return null;
-    }
-  }
-
-  // دالة لاستخراج رابط الـ iframe بناءً على serverId
-  async function extractIframeUrl(serverId, baseUrl) {
-    try {
-      // endpoint لـ أنمي ويت، بناءً على هيكلية الموقع
-      const response = await httpGet(`https://witanime.world/ajax/server/${serverId}`, {
-        headers: { 
-          "User-Agent": "Mozilla/5.0", 
-          Referer: baseUrl, 
-          "X-Requested-With": "XMLHttpRequest",
-          "Accept": "application/json"
-        }
-      });
-      if (!response) {
-        console.log(`Failed to load iframe for serverId ${serverId}`);
-        return null;
-      }
-      const data = await response.json();
-      const iframeUrl = data.url || data.embed || null;
-      if (!iframeUrl) {
-        console.log(`No iframe URL in response for serverId ${serverId}`);
-        return null;
-      }
-      return normalizeUrl(iframeUrl, baseUrl);
-    } catch (e) {
-      console.log(`Failed to load iframe for serverId ${serverId}:`, e);
-      return null;
-    }
-  }
-
-  // ==== Main Functionality ====
   try {
-    const pageRes = await httpGet(url, { headers: { "User-Agent": "Mozilla/5.0", Referer: url } });
-    if (!pageRes) {
-      console.log("Failed to fetch page HTML");
-      return JSON.stringify({ streams: [] });
-    }
-    const pageHtml = await pageRes.text();
-    console.log("Page HTML length:", pageHtml.length); // للتحقق من وجود محتوى
-
-    const serverRe = /<a[^>]+data-server-id=["'](\d+)["'][^>]*>\s*(?:<span[^>]*>)?([^<]+)(?:<\/span>)?/gi;
-    const servers = [];
-    let m;
-    while ((m = serverRe.exec(pageHtml)) !== null) {
-      const title = safeTrim(m[2]);
-      const serverId = m[1];
-      servers.push({ title, serverId });
-    }
-    console.log("Found servers:", servers);
-
-    const results = [];
-    for (const srv of servers) {
-      if (!/dailymotion|videa|streamwish/i.test(srv.title)) {
-        console.log(`Skipping unsupported server: ${srv.title}`);
-        continue;
-      }
-      const iframeUrl = await extractIframeUrl(srv.serverId, url);
-      if (!iframeUrl) {
-        console.log(`No iframe URL for server ${srv.title} (ID: ${srv.serverId})`);
-        continue;
-      }
-      console.log(`Iframe URL for ${srv.title}: ${iframeUrl}`);
-      let data = null;
-      if (/dailymotion/i.test(srv.title)) {
-        data = await extractDailymotion(iframeUrl);
-      } else if (/videa/i.test(srv.title)) {
-        data = await extractVidea(iframeUrl);
-      } else if (/streamwish/i.test(srv.title)) {
-        data = await extractStreamwish(iframeUrl, url);
-      }
-      if (data) {
-        data.title = srv.title; // استخدام العنوان الكامل (مثل "streamwish - FHD")
-        results.push(data);
-      }
+    // ==== Utilities ====
+    async function httpGet(u, headers = {}) {
+      const res = await fetchv2(u, {
+        headers: Object.assign(
+          {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
+            Referer: url,
+          },
+          headers
+        ),
+      });
+      return await res.text();
     }
 
-    console.log("Extracted streams:", results);
-    return JSON.stringify({ streams: results, subtitles: "" });
+    // ==== Embedded decoder ====
+    function decodeStreamingServers(html) {
+      try {
+        const zGMatch = html.match(/var _zG="([^"]+)";/);
+        const zHMatch = html.match(/var _zH="([^"]+)";/);
+        if (!zGMatch || !zHMatch) return [];
 
-  } catch (e) {
-    console.log("extractStreamUrl error:", e);
-    return JSON.stringify({ streams: [] });
+        const resourceRegistry = JSON.parse(atob(zGMatch[1]));
+        const configRegistry = JSON.parse(atob(zHMatch[1]));
+
+        const serverNames = {};
+        const serverLinks = html.matchAll(
+          /<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g
+        );
+        for (const match of serverLinks) {
+          serverNames[match[1]] = match[2].trim();
+        }
+
+        const servers = [];
+        for (let i = 0; i < 20; i++) {
+          const resourceData = resourceRegistry[i];
+          const config = configRegistry[i];
+          if (!resourceData || !config) continue;
+
+          let decrypted = resourceData.split("").reverse().join("");
+          decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, "");
+          let rawUrl = atob(decrypted);
+
+          const indexKey = atob(config.k);
+          const paramOffset = config.d[parseInt(indexKey, 10)];
+          rawUrl = rawUrl.slice(0, -paramOffset);
+
+          servers.push({
+            id: i,
+            name: serverNames[i] || `Unknown Server ${i}`,
+            url: rawUrl.trim(),
+          });
+        }
+
+        return servers;
+      } catch (e) {
+        return [];
+      }
+    }
+
+    // ==== Main Extraction ====
+    const html = await httpGet(url);
+    const servers = decodeStreamingServers(html);
+
+    if (!servers.length) {
+      return fallbackUrl("⚠️ لم يتم استخراج أي سيرفر من الصفحة");
+    }
+
+    let multiStreams = [];
+
+    for (const s of servers) {
+      try {
+        if (/ok\.ru/.test(s.url)) {
+          multiStreams.push(await okruExtractor(s.url));
+        } else if (/drive\.google/.test(s.url)) {
+          multiStreams.push(await gdriveExtractor(s.url));
+        } else if (/mp4upload/.test(s.url)) {
+          multiStreams.push(await mp4uploadExtractor(s.url));
+        } else if (/mega\.nz/.test(s.url)) {
+          // mega extractor placeholder
+          multiStreams.push({ name: "Mega.nz", url: s.url });
+        } else {
+          multiStreams.push({ name: s.name, url: s.url });
+        }
+      } catch (err) {
+        console.log("❌ Error extracting from server:", s.name, err);
+      }
+    }
+
+    if (!multiStreams.length) {
+      return fallbackUrl("⚠️ كل السيرفرات فشلت في الاستخراج");
+    }
+
+    return soraPrompt("اختر السيرفر المناسب:", multiStreams);
+  } catch (error) {
+    console.log("extractStreamUrl error:", error);
+    return fallbackUrl("⚠️ حدث خطأ غير متوقع أثناء الاستخراج");
   }
 }
