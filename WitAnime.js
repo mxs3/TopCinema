@@ -156,181 +156,269 @@ async function extractEpisodes(url) {
 // =========================================================================
 // ==== Sora stream ========================================================
 async function extractStreamUrl(url) {
-  try {
-    // ==== Utilities ====
-    async function httpGet(u, headers = {}) {
-      const res = await fetchv2(u, {
-        headers: Object.assign(
-          {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
-            Referer: url,
-          },
-          headers
-        ),
-      });
-      return await res.text();
-    }
+    try {
+        const response = await fetchv2(url);
+        const html = await response.text();
 
-    function fallbackUrl(msg) {
-      return [{ name: "Fallback", url: "", error: msg }];
-    }
+        const servers = a(html);
+        console.log(JSON.stringify(servers));
+        const priorities = [
+            "streamwish - fhd",
+            "streamwish",
+            "mp4upload",
+            "playerwish - fhd",
+            "playerwish",
+            "dailymotion"
+        ];
 
-    function soraPrompt(message, streams) {
-      return { message, streams };
-    }
+        let chosenServer = null;
+        for (const provider of priorities) {
+            chosenServer = servers.find(s =>
+                s.name.toLowerCase().includes(provider)
+            );
+            if (chosenServer) break;
+        }
 
-    // ==== Embedded decoder ====
-    function decodeStreamingServers(html) {
-      try {
+        if (!chosenServer) {
+            throw new Error("No valid server found");
+        }
+
+        const streamUrl = chosenServer.url;
+        const name = chosenServer.name.toLowerCase();
+
+        if (name.includes("streamwish")) {
+            const response = await fetchv2(streamUrl.replace("https://zuvioeb.com/e/", "https://hgplaycdn.com/e/"));
+            const html = await response.text();
+            return await b(html);
+        } else if (name.includes("mp4upload")) {
+            const response = await fetchv2(streamUrl);
+            const html = await response.text();
+            return await c(html);
+        } else if (name.includes("playerwish")) {
+            const response = await fetchv2(streamUrl);
+            const html = await response.text();
+            return await b(html);
+        } else if (name.includes("dailymotion")) {
+            return await extractDailymotion(streamUrl);
+        } else {
+            throw new Error("Unsupported provider: " + chosenServer.name);
+        }
+    } catch (err) {
+        console.error(err);
+        return "https://files.catbox.moe/avolvc.mp4";
+    }
+}
+
+function a(html) {
+    try {
         const zGMatch = html.match(/var _zG="([^"]+)";/);
         const zHMatch = html.match(/var _zH="([^"]+)";/);
-        if (!zGMatch || !zHMatch) return [];
+        if (!zGMatch || !zHMatch) throw new Error("Could not find _zG or _zH in HTML");
 
         const resourceRegistry = JSON.parse(atob(zGMatch[1]));
         const configRegistry = JSON.parse(atob(zHMatch[1]));
 
         const serverNames = {};
         const serverLinks = html.matchAll(
-          /<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g
+            /<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g
         );
         for (const match of serverLinks) {
-          serverNames[match[1]] = match[2].trim();
+            serverNames[match[1]] = match[2].trim();
         }
 
         const servers = [];
-        for (let i = 0; i < 20; i++) {
-          const resourceData = resourceRegistry[i];
-          const config = configRegistry[i];
-          if (!resourceData || !config) continue;
+        for (let i = 0; i < 10; i++) {
+            const resourceData = resourceRegistry[i];
+            const config = configRegistry[i];
+            if (!resourceData || !config) continue;
 
-          let decrypted = resourceData.split("").reverse().join("");
-          decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, "");
-          let rawUrl = atob(decrypted);
+            let decrypted = resourceData.split('').reverse().join('');
+            decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, '');
+            let rawUrl = atob(decrypted);
 
-          const indexKey = atob(config.k);
-          const paramOffset = config.d[parseInt(indexKey, 10)];
-          rawUrl = rawUrl.slice(0, -paramOffset);
+            const indexKey = atob(config.k);
+            const paramOffset = config.d[parseInt(indexKey, 10)];
+            rawUrl = rawUrl.slice(0, -paramOffset);
 
-          servers.push({
-            id: i,
-            name: serverNames[i] || `Unknown Server ${i}`,
-            url: rawUrl.trim(),
-          });
+            servers.push({
+                id: i,
+                name: serverNames[i] || `Unknown Server ${i}`,
+                url: rawUrl.trim()
+            });
         }
-        return servers;
-      } catch {
-        return [];
-      }
-    }
 
-    // ==== Extractors ====
-    async function extractDailymotion(embedUrl) {
-      try {
+        return servers;
+    } catch (error) {
+        return [];
+    }
+}
+
+async function b(data) {
+    const obfuscatedScript = data.match(/<script[^>]*>\s*(eval\(function\(p,a,c,k,e,d.*?\)[\s\S]*?)<\/script>/);
+    const unpackedScript = unpack(obfuscatedScript[1]);
+    const m3u8Match = unpackedScript.match(/"hls2"\s*:\s*"([^"]+)"/);
+    return m3u8Match ? m3u8Match[1] : null;
+}
+
+async function c(data) {
+    const srcMatch = data.match(/src:\s*"([^"]+\.mp4)"/);
+    return srcMatch ? srcMatch[1] : null;
+}
+
+// ✅ دالة Dailymotion مدموجة
+async function extractDailymotion(url) {
+    try {
         let videoId = null;
         const patterns = [
-          /dailymotion\.com\/video\/([a-zA-Z0-9]+)/,
-          /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/,
-          /[?&]video=([a-zA-Z0-9]+)/
+            /dailymotion\.com\/video\/([a-zA-Z0-9]+)/,          
+            /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/,    
+            /[?&]video=([a-zA-Z0-9]+)/                          
         ];
         for (const p of patterns) {
-          const m = embedUrl.match(p);
-          if (m) { videoId = m[1]; break; }
+            const match = url.match(p);
+            if (match) {
+                videoId = match[1];
+                break;
+            }
         }
-        if (!videoId) return embedUrl;
+        if (!videoId) {
+            console.log("Invalid Dailymotion URL");
+            return JSON.stringify({ streams: [], subtitles: "" });
+        }
 
         const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`);
         const metaJson = await metaRes.json();
         const hlsLink = metaJson.qualities?.auto?.[0]?.url;
-        if (!hlsLink) return embedUrl;
+        if (!hlsLink) return JSON.stringify({ streams: [], subtitles: "" });
 
-        const res = await fetch(hlsLink);
-        const text = await res.text();
-        const regex = /#EXT-X-STREAM-INF:.*RESOLUTION=\d+x(\d+).*?\n(https?:\/\/[^\n]+)/g;
-        const streams = [];
-        let m;
-        while ((m = regex.exec(text)) !== null) {
-          streams.push({ h: parseInt(m[1]), url: m[2] });
+        async function getBestHls(hlsUrl) {
+            try {
+                const res = await fetch(hlsUrl);
+                const text = await res.text();
+                const regex = /#EXT-X-STREAM-INF:.*RESOLUTION=(\d+)x(\d+).*?\n(https?:\/\/[^\n]+)/g;
+                const streams = [];
+                let match;
+                while ((match = regex.exec(text)) !== null) {
+                    streams.push({ width: parseInt(match[1]), height: parseInt(match[2]), url: match[3] });
+                }
+                if (streams.length === 0) return hlsUrl;
+                streams.sort((a, b) => b.height - a.height);
+                return streams[0].url;
+            } catch {
+                return hlsUrl;
+            }
         }
-        if (streams.length) {
-          streams.sort((a,b)=>b.h-a.h);
-          return streams[0].url;
+
+        const bestHls = await getBestHls(hlsLink);
+        const subtitles = metaJson.subtitles?.data?.['en-auto']?.urls?.[0] || "";
+
+        const result = {
+            streams: ["1080p", bestHls],
+            subtitles: subtitles
+        };
+
+        console.log("Extracted Dailymotion result:" + JSON.stringify(result));
+        return JSON.stringify(result);
+    } catch {
+        const empty = { streams: [], subtitles: "" };
+        console.log("Extracted Dailymotion result:" + JSON.stringify(empty));
+        return JSON.stringify(empty);
+    }
+}
+
+// ---- Unpacker utils ----
+class Unbaser {
+    constructor(base) {
+        this.ALPHABET = {
+            62: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            95: "' !\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~'",
+        };
+        this.dictionary = {};
+        this.base = base;
+        if (36 < base && base < 62) {
+            this.ALPHABET[base] = this.ALPHABET[base] ||
+                this.ALPHABET[62].substr(0, base);
         }
-        return hlsLink;
-      } catch {
-        return embedUrl;
-      }
-    }
-
-    async function extractOkru(embedUrl) {
-      try {
-        const html = await httpGet(embedUrl);
-        const m3u8Match = html.match(/"(https:[^"]+m3u8[^"]*)"/);
-        return m3u8Match ? m3u8Match[1] : embedUrl;
-      } catch {
-        return embedUrl;
-      }
-    }
-
-    async function extractGoogleDrive(embedUrl) {
-      try {
-        const idMatch = embedUrl.match(/\/d\/([^/]+)\//);
-        if (!idMatch) return embedUrl;
-        const fileId = idMatch[1];
-        return `https://drive.google.com/uc?export=download&id=${fileId}`;
-      } catch {
-        return embedUrl;
-      }
-    }
-
-    async function extractMp4upload(embedUrl) {
-      try {
-        const html = await httpGet(embedUrl);
-        const match = html.match(/src:\s*"([^"]+)",/);
-        return match ? match[1] : embedUrl;
-      } catch {
-        return embedUrl;
-      }
-    }
-
-    async function extractMega(embedUrl) {
-      // Placeholder: mega extraction usually needs crypto lib
-      return embedUrl;
-    }
-
-    // ==== Main ====
-    const html = await httpGet(url);
-    const servers = decodeStreamingServers(html);
-    if (!servers.length) return fallbackUrl("⚠️ لم يتم استخراج أي سيرفر من الصفحة");
-
-    let multiStreams = [];
-    for (const s of servers) {
-      try {
-        let final = s.url;
-        if (/dailymotion/.test(s.url)) {
-          final = await extractDailymotion(s.url);
-        } else if (/ok\.ru/.test(s.url)) {
-          final = await extractOkru(s.url);
-        } else if (/drive\.google/.test(s.url)) {
-          final = await extractGoogleDrive(s.url);
-        } else if (/mp4upload/.test(s.url)) {
-          final = await extractMp4upload(s.url);
-        } else if (/mega\.nz/.test(s.url)) {
-          final = await extractMega(s.url);
+        if (2 <= base && base <= 36) {
+            this.unbase = (value) => parseInt(value, base);
         }
-        multiStreams.push({ name: s.name, url: final });
-      } catch (err) {
-        console.log("❌ Error extracting from", s.name, err);
-      }
+        else {
+            try {
+                [...this.ALPHABET[base]].forEach((cipher, index) => {
+                    this.dictionary[cipher] = index;
+                });
+            }
+            catch (er) {
+                throw Error("Unsupported base encoding.");
+            }
+            this.unbase = this._dictunbaser;
+        }
     }
-
-    if (!multiStreams.length) {
-      return fallbackUrl("⚠️ كل السيرفرات فشلت في الاستخراج");
+    _dictunbaser(value) {
+        let ret = 0;
+        [...value].reverse().forEach((cipher, index) => {
+            ret = ret + ((Math.pow(this.base, index)) * this.dictionary[cipher]);
+        });
+        return ret;
     }
-    return soraPrompt("اختر السيرفر المناسب:", multiStreams);
+}
 
-  } catch (error) {
-    console.log("extractStreamUrl error:", error);
-    return [{ name: "Fallback", url: "", error: "⚠️ خطأ غير متوقع" }];
-  }
+function detect(source) {
+    return source.replace(" ", "").startsWith("eval(function(p,a,c,k,e,");
+}
+
+function unpack(source) {
+    let { payload, symtab, radix, count } = _filterargs(source);
+    if (count != symtab.length) {
+        throw Error("Malformed p.a.c.k.e.r. symtab.");
+    }
+    let unbase;
+    try {
+        unbase = new Unbaser(radix);
+    }
+    catch (e) {
+        throw Error("Unknown p.a.c.k.e.r. encoding.");
+    }
+    function lookup(match) {
+        const word = match;
+        let word2;
+        if (radix == 1) {
+            word2 = symtab[parseInt(word)];
+        }
+        else {
+            word2 = symtab[unbase.unbase(word)];
+        }
+        return word2 || word;
+    }
+    source = payload.replace(/\b\w+\b/g, lookup);
+    return _replacestrings(source);
+    function _filterargs(source) {
+        const juicers = [
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$, *(\d+), *(.*)\)\)/,
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$/,
+        ];
+        for (const juicer of juicers) {
+            const args = juicer.exec(source);
+            if (args) {
+                let a = args;
+                if (a[2] == "[]") {
+                }
+                try {
+                    return {
+                        payload: a[1],
+                        symtab: a[4].split("|"),
+                        radix: parseInt(a[2]),
+                        count: parseInt(a[3]),
+                    };
+                }
+                catch (ValueError) {
+                    throw Error("Corrupted p.a.c.k.e.r. data.");
+                }
+            }
+        }
+        throw Error("Could not make sense of p.a.c.k.e.r data (unexpected code structure)");
+    }
+    function _replacestrings(source) {
+        return source;
+    }
 }
