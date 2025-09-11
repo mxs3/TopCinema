@@ -155,24 +155,57 @@ async function extractEpisodes(url) {
 // ===================================
 // ==== Sora stream ====
 async function extractStreamUrl(url) {
-  // ==== Utilities ====
   const hasFetchV2 = typeof fetchv2 === "function";
   async function httpGet(u, opts = {}) {
     try {
       if (hasFetchV2) return await fetchv2(u, opts.headers || {}, opts.method || "GET", opts.body || null);
       return await fetch(u, { method: opts.method || "GET", headers: opts.headers || {}, body: opts.body || null });
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
-  function safeTrim(s) { return s ? String(s).trim() : ""; }
+
   function normalizeUrl(raw, base = "") {
     if (!raw) return raw;
-    raw = safeTrim(raw);
+    raw = String(raw).trim();
     if (raw.startsWith("//")) return "https:" + raw;
     if (/^https?:\/\//i.test(raw)) return raw;
     try { return base ? new URL(raw, base).href : "https://" + raw.replace(/^\/+/, ""); } catch { return raw; }
   }
+
+  try {
+    const pageRes = await httpGet(url, { headers: { "User-Agent": "Mozilla/5.0", Referer: url } });
+    if (!pageRes) return [];
+
+    const html = await pageRes.text();
+    const serverRe = /<a[^>]+data-server-id=["'](\d+)["'][^>]*>\s*<span class=["']ser["']>([^<]+)<\/span>/gi;
+    const servers = [];
+    let m;
+    while ((m = serverRe.exec(html)) !== null) {
+      servers.push({
+        id: m[1],
+        name: m[2],
+        // نقدر نحاول ناخد iframe url إذا موجود
+        url: null
+      });
+    }
+
+    const iframes = [...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi)].map(f => normalizeUrl(f[1], url));
+
+    // ربط كل سيرفر بأقرب iframe اسمه يحتوي الاسم
+    servers.forEach(s => {
+      for (const f of iframes) {
+        if (f.toLowerCase().includes(s.name.toLowerCase())) {
+          s.url = f;
+          break;
+        }
+      }
+    });
+
+    return servers.filter(s => s.url); // فقط السيرفرات التي تم إيجاد رابط لها
+  } catch (e) {
+    console.log("listWitAnimeServers error:", e);
+    return [];
+  }
+}
 
   // ==== Dailymotion Extractor ====
   async function extractDailymotion(url) {
