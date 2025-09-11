@@ -161,9 +161,16 @@ async function extractStreamUrl(url) {
 
   async function httpGet(u, opts = {}) {
     try {
-      if (hasFetchV2) return await fetchv2(u, opts.headers || {}, opts.method || "GET", opts.body || null);
-      return await fetch(u, { method: opts.method || "GET", headers: opts.headers || {}, body: opts.body || null });
-    } catch {
+      const response = hasFetchV2
+        ? await fetchv2(u, opts.headers || {}, opts.method || "GET", opts.body || null)
+        : await fetch(u, { method: opts.method || "GET", headers: opts.headers || {}, body: opts.body || null });
+      if (!response.ok) {
+        console.log(`HTTP request failed: ${response.status} ${response.statusText}`);
+        return null;
+      }
+      return response;
+    } catch (e) {
+      console.log(`HTTP request error for ${u}:`, e);
       return null;
     }
   }
@@ -178,47 +185,61 @@ async function extractStreamUrl(url) {
     try { return base ? new URL(raw, base).href : "https://" + raw.replace(/^\/+/, ""); } catch { return raw; }
   }
 
-  // ==== Unpack Helper ====
   class Unbaser {
     constructor(base) {
       this.ALPHABET = { 62: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" };
       this.dictionary = {};
       this.base = base;
       if (2 <= base && base <= 36) this.unbase = (value) => parseInt(value, base);
-      else [...this.ALPHABET[62]].forEach((c,i)=>this.dictionary[c]=i), this.unbase=this._dictunbaser;
+      else [...this.ALPHABET[62]].forEach((c, i) => this.dictionary[c] = i), this.unbase = this._dictunbaser;
     }
-    _dictunbaser(value) { return [...value].reverse().reduce((a,v,i)=>a+Math.pow(this.base,i)*this.dictionary[v],0); }
+    _dictunbaser(value) { return [...value].reverse().reduce((a, v, i) => a + Math.pow(this.base, i) * this.dictionary[v], 0); }
   }
 
   function unpack(source) {
     const juicers = [/}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\)/];
     let args;
-    for(const j of juicers){ const m=j.exec(source); if(m){ args=m; break; } }
-    if(!args) throw Error("Cannot parse p.a.c.k.e.r.");
+    for (const j of juicers) { const m = j.exec(source); if (m) { args = m; break; } }
+    if (!args) throw Error("Cannot parse p.a.c.k.e.r.");
     const [payload, radix, count, symtab] = [args[1], parseInt(args[2]), parseInt(args[3]), args[4].split("|")];
     const unbase = new Unbaser(radix);
-    const lookup = (w) => (radix==1 ? symtab[parseInt(w)] : symtab[unbase.unbase(w)]) || w;
+    const lookup = (w) => (radix == 1 ? symtab[parseInt(w)] : symtab[unbase.unbase(w)]) || w;
     return payload.replace(/\b\w+\b/g, lookup);
   }
 
   // ==== Stream Extractors ====
-  async function extractStreamwish(html, baseUrl) {
+  async function extractStreamwish(iframeUrl, baseUrl) {
     try {
+      const res = await httpGet(iframeUrl, { headers: { "User-Agent": "Mozilla/5.0", Referer: baseUrl } });
+      if (!res) {
+        console.log("Failed to fetch Streamwish iframe");
+        return null;
+      }
+      const html = await res.text();
       const obf = html.match(/<script[^>]*>\s*(eval\(function\(p,a,c,k,e,d.*?\)[\s\S]*?)<\/script>/);
-      if(!obf) return null;
+      if (!obf) {
+        console.log("No packed script found for Streamwish");
+        return null;
+      }
       const unpacked = unpack(obf[1]);
       const m3u8 = unpacked.match(/file:"(https?:\/\/.*?\.m3u8.*?)"/);
-      if(!m3u8) return null;
+      if (!m3u8) {
+        console.log("No m3u8 link found in unpacked script");
+        return null;
+      }
       return {
         title: "Streamwish",
         streamUrl: normalizeUrl(m3u8[1], baseUrl),
         type: "hls",
-        headers: { Referer: baseUrl, "User-Agent": "Mozilla/5.0" }
+        headers: { Referer: iframeUrl, "User-Agent": "Mozilla/5.0" }
       };
-    } catch(e){ console.log("Streamwish extract error:", e); return null; }
+    } catch (e) {
+      console.log("Streamwish extract error:", e);
+      return null;
+    }
   }
 
-  async function extractDailymotion(url) {
+  async function extractDailymotion(iframeUrl) {
     try {
       let videoId = null;
       const patterns = [
@@ -226,58 +247,114 @@ async function extractStreamUrl(url) {
         /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/,
         /[?&]video=([a-zA-Z0-9]+)/
       ];
-      for(const p of patterns){ const m=url.match(p); if(m){videoId=m[1]; break;} }
-      if(!videoId) return null;
+      for (const p of patterns) { const m = iframeUrl.match(p); if (m) { videoId = m[1]; break; } }
+      if (!videoId) {
+        console.log("No video ID found for Dailymotion");
+        return null;
+      }
       const meta = await (await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`)).json();
       const hlsLink = meta.qualities?.auto?.[0]?.url;
-      if(!hlsLink) return null;
-      return { title: "Dailymotion", streamUrl: hlsLink, type: "hls", headers:{ "User-Agent":"Mozilla/5.0" } };
-    } catch(e){ console.log("Dailymotion extract error:", e); return null; }
+      if (!hlsLink) {
+        console.log("No HLS link found in Dailymotion metadata");
+        return null;
+      }
+      return { title: "Dailymotion", streamUrl: hlsLink, type: "hls", headers: { "User-Agent": "Mozilla/5.0" } };
+    } catch (e) {
+      console.log("Dailymotion extract error:", e);
+      return null;
+    }
   }
 
-  async function extractVidea(url) {
+  async function extractVidea(iframeUrl) {
     try {
-      const res = await httpGet(url, { headers:{ "User-Agent":"Mozilla/5.0" } });
-      if(!res) return null;
+      const res = await httpGet(iframeUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+      if (!res) {
+        console.log("Failed to fetch Videa iframe");
+        return null;
+      }
       const html = await res.text();
       const match = html.match(/"videoUrl"\s*:\s*"([^"]+)"/i);
-      if(!match) return null;
-      return { title:"Videa", streamUrl: match[1].replace(/\\\//g,"/"), type:"mp4", headers:{ Referer: url, "User-Agent":"Mozilla/5.0" } };
-    } catch(e){ console.log("Videa extract error:",e); return null; }
+      if (!match) {
+        console.log("No video URL found for Videa");
+        return null;
+      }
+      return { title: "Videa", streamUrl: match[1].replace(/\\\//g, "/"), type: "mp4", headers: { Referer: iframeUrl, "User-Agent": "Mozilla/5.0" } };
+    } catch (e) {
+      console.log("Videa extract error:", e);
+      return null;
+    }
+  }
+
+  // دالة لاستخراج رابط الـ iframe بناءً على serverId
+  async function extractIframeUrl(serverId, baseUrl) {
+    try {
+      // افتراض: أنمي ويت بيستخدم endpoint مشابه لـ /ajax/server/<serverId>
+      const response = await httpGet(`${baseUrl}/ajax/server/${serverId}`, {
+        headers: { "User-Agent": "Mozilla/5.0", Referer: baseUrl, "X-Requested-With": "XMLHttpRequest" }
+      });
+      if (!response) {
+        console.log(`Failed to load iframe for serverId ${serverId}`);
+        return null;
+      }
+      const data = await response.json(); // افتراض إن الرد JSON
+      const iframeUrl = data.url || data.embed || null;
+      return iframeUrl ? normalizeUrl(iframeUrl, baseUrl) : null;
+    } catch (e) {
+      console.log(`Failed to load iframe for serverId ${serverId}:`, e);
+      return null;
+    }
   }
 
   // ==== Main Functionality ====
   try {
-    const pageRes = await httpGet(url, { headers:{ "User-Agent":"Mozilla/5.0", Referer:url } });
-    if(!pageRes) return JSON.stringify({ streams: [] });
+    const pageRes = await httpGet(url, { headers: { "User-Agent": "Mozilla/5.0", Referer: url } });
+    if (!pageRes) {
+      console.log("Failed to fetch page HTML");
+      return JSON.stringify({ streams: [] });
+    }
     const pageHtml = await pageRes.text();
+    console.log("Page HTML:", pageHtml);
 
-    // جمع كل السيرفرات الظاهرة على الصفحة
-    const serverRe = /<a[^>]+class=["']server-link["'][^>]+data-server-id=["'](\d+)["'][^>]*>\s*<span[^>]*>([^<]+)<\/span>/gi;
+    const serverRe = /<a[^>]+data-server-id=["'](\d+)["'][^>]*>\s*(?:<span[^>]*>)?([^<]+)(?:<\/span>)?/gi;
     const servers = [];
     let m;
-    while((m = serverRe.exec(pageHtml)) !== null){
+    while ((m = serverRe.exec(pageHtml)) !== null) {
       const title = safeTrim(m[2]);
       const serverId = m[1];
       servers.push({ title, serverId });
     }
-
-    // جمع الروابط الموجودة داخل iframes
-    const iframeRe = /<iframe[^>]+src=["']([^"']+)["']/gi;
-    const iframes = [...pageHtml.matchAll(iframeRe)].map(x=>normalizeUrl(x[1], url));
+    console.log("Found servers:", servers);
 
     const results = [];
-    for(const srv of servers){
-      let rawUrl = iframes[parseInt(srv.serverId)] || url;
+    for (const srv of servers) {
+      if (!/dailymotion|videa|streamwish/i.test(srv.title)) {
+        console.log(`Skipping unsupported server: ${srv.title}`);
+        continue;
+      }
+      const iframeUrl = await extractIframeUrl(srv.serverId, url);
+      if (!iframeUrl) {
+        console.log(`No iframe URL for server ${srv.title} (ID: ${srv.serverId})`);
+        continue;
+      }
       let data = null;
-      if(/dailymotion/i.test(srv.title)) data = await extractDailymotion(rawUrl);
-      else if(/videa/i.test(srv.title)) data = await extractVidea(rawUrl);
-      else if(/streamwish/i.test(srv.title)) data = await extractStreamwish(pageHtml, url);
-      if(data) results.push(data);
+      if (/dailymotion/i.test(srv.title)) {
+        data = await extractDailymotion(iframeUrl);
+      } else if (/videa/i.test(srv.title)) {
+        data = await extractVidea(iframeUrl);
+      } else if (/streamwish/i.test(srv.title)) {
+        data = await extractStreamwish(iframeUrl, url);
+      }
+      if (data) {
+        data.title = srv.title; // استخدام العنوان الكامل (مثل "streamwish - FHD")
+        results.push(data);
+      }
     }
 
-    // إعادة كل النتائج المتاحة
+    console.log("Extracted streams:", results);
     return JSON.stringify({ streams: results, subtitles: "" });
 
-  } catch(e){ console.log("extractStreamUrl error:", e); return JSON.stringify({ streams: [] }); }
+  } catch (e) {
+    console.log("extractStreamUrl error:", e);
+    return JSON.stringify({ streams: [] });
+  }
 }
