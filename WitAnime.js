@@ -156,269 +156,113 @@ async function extractEpisodes(url) {
 // =========================================================================
 // ==== Sora stream ========================================================
 async function extractStreamUrl(url) {
-    try {
-        const response = await fetchv2(url);
-        const html = await response.text();
-
-        const servers = a(html);
-        console.log(JSON.stringify(servers));
-        const priorities = [
-            "streamwish - fhd",
-            "streamwish",
-            "mp4upload",
-            "playerwish - fhd",
-            "playerwish",
-            "dailymotion"
-        ];
-
-        let chosenServer = null;
-        for (const provider of priorities) {
-            chosenServer = servers.find(s =>
-                s.name.toLowerCase().includes(provider)
-            );
-            if (chosenServer) break;
-        }
-
-        if (!chosenServer) {
-            throw new Error("No valid server found");
-        }
-
-        const streamUrl = chosenServer.url;
-        const name = chosenServer.name.toLowerCase();
-
-        if (name.includes("streamwish")) {
-            const response = await fetchv2(streamUrl.replace("https://zuvioeb.com/e/", "https://hgplaycdn.com/e/"));
-            const html = await response.text();
-            return await b(html);
-        } else if (name.includes("mp4upload")) {
-            const response = await fetchv2(streamUrl);
-            const html = await response.text();
-            return await c(html);
-        } else if (name.includes("playerwish")) {
-            const response = await fetchv2(streamUrl);
-            const html = await response.text();
-            return await b(html);
-        } else if (name.includes("dailymotion")) {
-            return await extractDailymotion(streamUrl);
-        } else {
-            throw new Error("Unsupported provider: " + chosenServer.name);
-        }
-    } catch (err) {
-        console.error(err);
-        return "https://files.catbox.moe/avolvc.mp4";
+  try {
+    // ==== Utilities ====
+    async function httpGet(u, headers = {}) {
+      const res = await fetchv2(u, {
+        headers: Object.assign(
+          {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
+            Referer: url,
+          },
+          headers
+        ),
+      });
+      return await res.text();
     }
-}
 
-function a(html) {
-    try {
+    function fallbackUrl(msg) {
+      return [{ name: "Fallback", url: "", error: msg }];
+    }
+
+    function soraPrompt(message, streams) {
+      return {
+        message,
+        streams,
+      };
+    }
+
+    // ==== Embedded decoder ====
+    function decodeStreamingServers(html) {
+      try {
         const zGMatch = html.match(/var _zG="([^"]+)";/);
         const zHMatch = html.match(/var _zH="([^"]+)";/);
-        if (!zGMatch || !zHMatch) throw new Error("Could not find _zG or _zH in HTML");
+        if (!zGMatch || !zHMatch) return [];
 
         const resourceRegistry = JSON.parse(atob(zGMatch[1]));
         const configRegistry = JSON.parse(atob(zHMatch[1]));
 
         const serverNames = {};
         const serverLinks = html.matchAll(
-            /<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g
+          /<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g
         );
         for (const match of serverLinks) {
-            serverNames[match[1]] = match[2].trim();
+          serverNames[match[1]] = match[2].trim();
         }
 
         const servers = [];
-        for (let i = 0; i < 10; i++) {
-            const resourceData = resourceRegistry[i];
-            const config = configRegistry[i];
-            if (!resourceData || !config) continue;
+        for (let i = 0; i < 20; i++) {
+          const resourceData = resourceRegistry[i];
+          const config = configRegistry[i];
+          if (!resourceData || !config) continue;
 
-            let decrypted = resourceData.split('').reverse().join('');
-            decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, '');
-            let rawUrl = atob(decrypted);
+          let decrypted = resourceData.split("").reverse().join("");
+          decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, "");
+          let rawUrl = atob(decrypted);
 
-            const indexKey = atob(config.k);
-            const paramOffset = config.d[parseInt(indexKey, 10)];
-            rawUrl = rawUrl.slice(0, -paramOffset);
+          const indexKey = atob(config.k);
+          const paramOffset = config.d[parseInt(indexKey, 10)];
+          rawUrl = rawUrl.slice(0, -paramOffset);
 
-            servers.push({
-                id: i,
-                name: serverNames[i] || `Unknown Server ${i}`,
-                url: rawUrl.trim()
-            });
+          servers.push({
+            id: i,
+            name: serverNames[i] || `Unknown Server ${i}`,
+            url: rawUrl.trim(),
+          });
         }
 
         return servers;
-    } catch (error) {
+      } catch (e) {
         return [];
+      }
     }
-}
 
-async function b(data) {
-    const obfuscatedScript = data.match(/<script[^>]*>\s*(eval\(function\(p,a,c,k,e,d.*?\)[\s\S]*?)<\/script>/);
-    const unpackedScript = unpack(obfuscatedScript[1]);
-    const m3u8Match = unpackedScript.match(/"hls2"\s*:\s*"([^"]+)"/);
-    return m3u8Match ? m3u8Match[1] : null;
-}
+    // ==== Main Extraction ====
+    const html = await httpGet(url);
+    const servers = decodeStreamingServers(html);
 
-async function c(data) {
-    const srcMatch = data.match(/src:\s*"([^"]+\.mp4)"/);
-    return srcMatch ? srcMatch[1] : null;
-}
+    if (!servers.length) {
+      return fallbackUrl("⚠️ لم يتم استخراج أي سيرفر من الصفحة");
+    }
 
-// ✅ دالة Dailymotion مدموجة
-async function extractDailymotion(url) {
-    try {
-        let videoId = null;
-        const patterns = [
-            /dailymotion\.com\/video\/([a-zA-Z0-9]+)/,          
-            /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/,    
-            /[?&]video=([a-zA-Z0-9]+)/                          
-        ];
-        for (const p of patterns) {
-            const match = url.match(p);
-            if (match) {
-                videoId = match[1];
-                break;
-            }
+    let multiStreams = [];
+
+    for (const s of servers) {
+      try {
+        if (/ok\.ru/.test(s.url)) {
+          multiStreams.push({ name: "Ok.ru", url: s.url });
+        } else if (/drive\.google/.test(s.url)) {
+          multiStreams.push({ name: "Google Drive", url: s.url });
+        } else if (/mp4upload/.test(s.url)) {
+          multiStreams.push({ name: "Mp4Upload", url: s.url });
+        } else if (/mega\.nz/.test(s.url)) {
+          multiStreams.push({ name: "Mega.nz", url: s.url });
+        } else {
+          multiStreams.push({ name: s.name, url: s.url });
         }
-        if (!videoId) {
-            console.log("Invalid Dailymotion URL");
-            return JSON.stringify({ streams: [], subtitles: "" });
-        }
+      } catch (err) {
+        console.log("❌ Error extracting from server:", s.name, err);
+      }
+    }
 
-        const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`);
-        const metaJson = await metaRes.json();
-        const hlsLink = metaJson.qualities?.auto?.[0]?.url;
-        if (!hlsLink) return JSON.stringify({ streams: [], subtitles: "" });
+    if (!multiStreams.length) {
+      return fallbackUrl("⚠️ كل السيرفرات فشلت في الاستخراج");
+    }
 
-        async function getBestHls(hlsUrl) {
-            try {
-                const res = await fetch(hlsUrl);
-                const text = await res.text();
-                const regex = /#EXT-X-STREAM-INF:.*RESOLUTION=(\d+)x(\d+).*?\n(https?:\/\/[^\n]+)/g;
-                const streams = [];
-                let match;
-                while ((match = regex.exec(text)) !== null) {
-                    streams.push({ width: parseInt(match[1]), height: parseInt(match[2]), url: match[3] });
-                }
-                if (streams.length === 0) return hlsUrl;
-                streams.sort((a, b) => b.height - a.height);
-                return streams[0].url;
-            } catch {
-                return hlsUrl;
-            }
-        }
-
-        const bestHls = await getBestHls(hlsLink);
-        const subtitles = metaJson.subtitles?.data?.['en-auto']?.urls?.[0] || "";
-
-        const result = {
-            streams: ["1080p", bestHls],
-            subtitles: subtitles
-        };
-
-        console.log("Extracted Dailymotion result:" + JSON.stringify(result));
-        return JSON.stringify(result);
-    } catch {
-        const empty = { streams: [], subtitles: "" };
-        console.log("Extracted Dailymotion result:" + JSON.stringify(empty));
-        return JSON.stringify(empty);
-    }
-}
-
-// ---- Unpacker utils ----
-class Unbaser {
-    constructor(base) {
-        this.ALPHABET = {
-            62: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
-            95: "' !\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~'",
-        };
-        this.dictionary = {};
-        this.base = base;
-        if (36 < base && base < 62) {
-            this.ALPHABET[base] = this.ALPHABET[base] ||
-                this.ALPHABET[62].substr(0, base);
-        }
-        if (2 <= base && base <= 36) {
-            this.unbase = (value) => parseInt(value, base);
-        }
-        else {
-            try {
-                [...this.ALPHABET[base]].forEach((cipher, index) => {
-                    this.dictionary[cipher] = index;
-                });
-            }
-            catch (er) {
-                throw Error("Unsupported base encoding.");
-            }
-            this.unbase = this._dictunbaser;
-        }
-    }
-    _dictunbaser(value) {
-        let ret = 0;
-        [...value].reverse().forEach((cipher, index) => {
-            ret = ret + ((Math.pow(this.base, index)) * this.dictionary[cipher]);
-        });
-        return ret;
-    }
-}
-
-function detect(source) {
-    return source.replace(" ", "").startsWith("eval(function(p,a,c,k,e,");
-}
-
-function unpack(source) {
-    let { payload, symtab, radix, count } = _filterargs(source);
-    if (count != symtab.length) {
-        throw Error("Malformed p.a.c.k.e.r. symtab.");
-    }
-    let unbase;
-    try {
-        unbase = new Unbaser(radix);
-    }
-    catch (e) {
-        throw Error("Unknown p.a.c.k.e.r. encoding.");
-    }
-    function lookup(match) {
-        const word = match;
-        let word2;
-        if (radix == 1) {
-            word2 = symtab[parseInt(word)];
-        }
-        else {
-            word2 = symtab[unbase.unbase(word)];
-        }
-        return word2 || word;
-    }
-    source = payload.replace(/\b\w+\b/g, lookup);
-    return _replacestrings(source);
-    function _filterargs(source) {
-        const juicers = [
-            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$, *(\d+), *(.*)\)\)/,
-            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$/,
-        ];
-        for (const juicer of juicers) {
-            const args = juicer.exec(source);
-            if (args) {
-                let a = args;
-                if (a[2] == "[]") {
-                }
-                try {
-                    return {
-                        payload: a[1],
-                        symtab: a[4].split("|"),
-                        radix: parseInt(a[2]),
-                        count: parseInt(a[3]),
-                    };
-                }
-                catch (ValueError) {
-                    throw Error("Corrupted p.a.c.k.e.r. data.");
-                }
-            }
-        }
-        throw Error("Could not make sense of p.a.c.k.e.r data (unexpected code structure)");
-    }
-    function _replacestrings(source) {
-        return source;
-    }
+    return soraPrompt("اختر السيرفر المناسب:", multiStreams);
+  } catch (error) {
+    console.log("extractStreamUrl error:", error);
+    return fallbackUrl("⚠️ حدث خطأ غير متوقع أثناء الاستخراج");
+  }
 }
