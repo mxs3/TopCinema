@@ -167,8 +167,8 @@ async function extractStreamUrl(url) {
             {
               "User-Agent":
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
-              Referer: url,
-              Origin: new URL(url).origin,
+              Referer: u,
+              Origin: new URL(u).origin,
               "Accept-Language": "en-US,en;q=0.9",
             },
             headers
@@ -194,60 +194,142 @@ async function extractStreamUrl(url) {
     }
 
     function fallbackUrl(msg) {
-      return [{ name: "Fallback", url: "", error: msg }];
+      return { name: "Fallback", url: "", error: msg };
     }
 
-    function soraPrompt(message, streams) {
-      return {
-        message,
-        streams,
-      };
+    // ==== Handle Specific Servers ====
+    async function extractDailymotion(url) {
+    try {
+        let videoId = null;
+        const patterns = [
+            /dailymotion\.com\/video\/([a-zA-Z0-9]+)/,          
+            /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/,    
+            /[?&]video=([a-zA-Z0-9]+)/                          
+        ];
+        for (const p of patterns) {
+            const match = url.match(p);
+            if (match) {
+                videoId = match[1];
+                break;
+            }
+        }
+        if (!videoId) {
+            console.log("Invalid Dailymotion URL");
+            return JSON.stringify({ streams: [], subtitles: "" });
+        }
+
+        const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`);
+        const metaJson = await metaRes.json();
+        const hlsLink = metaJson.qualities?.auto?.[0]?.url;
+        if (!hlsLink) return JSON.stringify({ streams: [], subtitles: "" });
+
+        async function getBestHls(hlsUrl) {
+            try {
+                const res = await fetch(hlsUrl);
+                const text = await res.text();
+                const regex = /#EXT-X-STREAM-INF:.*RESOLUTION=(\d+)x(\d+).*?\n(https?:\/\/[^\n]+)/g;
+                const streams = [];
+                let match;
+                while ((match = regex.exec(text)) !== null) {
+                    streams.push({ width: parseInt(match[1]), height: parseInt(match[2]), url: match[3] });
+                }
+                if (streams.length === 0) return hlsUrl;
+                streams.sort((a, b) => b.height - a.height);
+                return streams[0].url;
+            } catch {
+                return hlsUrl;
+            }
+        }
+
+        const bestHls = await getBestHls(hlsLink);
+        const subtitles = metaJson.subtitles?.data?.['en-auto']?.urls?.[0] || "";
+
+        const result = {
+            streams: ["1080p", bestHls],
+            subtitles: subtitles
+        };
+
+        console.log("Extracted Dailymotion result:" + JSON.stringify(result));
+        return JSON.stringify(result);
+    } catch {
+        const empty = { streams: [], subtitles: "" };
+        console.log("Extracted Dailymotion result:" + JSON.stringify(empty));
+        return JSON.stringify(empty);
+    }
+}
+
+    async function handleStreamwish(url) {
+      try {
+        const html = await httpGet(url);
+        const videoMatch = html.match(/<source[^>]+src="([^"]+)"/);
+        if (videoMatch && (await checkUrlValidity(videoMatch[1]))) {
+          return { name: "Streamwish", url: videoMatch[1] };
+        }
+        return null;
+      } catch (err) {
+        console.error("Error extracting Streamwish:", err.message);
+        return null;
+      }
     }
 
     // ==== Embedded decoder ====
-    function decodeStreamingServers(html) {
+    async function decodeStreamingServers(html) {
       try {
+        // فحص إذا كان فيه iframes تحتوي على السيرفرات
+        const iframeMatches = html.matchAll(/<iframe[^>]+src="([^"]+)"/g);
+        const servers = [];
+        for (const match of iframeMatches) {
+          const iframeUrl = match[1];
+          if (/dailymotion\.com/.test(iframeUrl)) {
+            const stream = await extractDailymotion(iframeUrl);
+            if (stream) servers.push(stream);
+          } else if (/streamwish\.to/.test(iframeUrl)) {
+            const stream = await handleStreamwish(iframeUrl);
+            if (stream) servers.push(stream);
+          }
+        }
+
+        // فحص _zG و _zH لو موجودين
         const zGMatch = html.match(/var _zG="([^"]+)";/);
         const zHMatch = html.match(/var _zH="([^"]+)";/);
-        if (!zGMatch || !zHMatch) {
-          console.warn("zG or zH not found, checking for iframes...");
-          const iframeMatch = html.match(/<iframe[^>]+src="([^"]+)"/);
-          if (iframeMatch) {
-            return [{ name: "Iframe", url: iframeMatch[1] }];
+        if (zGMatch && zHMatch) {
+          try {
+            const resourceRegistry = JSON.parse(atob(zGMatch[1]));
+            const configRegistry = JSON.parse(atob(zHMatch[1]));
+
+            const serverNames = {};
+            const serverLinks = html.matchAll(
+              /<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g
+            );
+            for (const match of serverLinks) {
+              serverNames[match[1]] = match[2].trim();
+            }
+
+            for (let i = 0; i < 20; i++) {
+              const resourceData = resourceRegistry[i];
+              const config = configRegistry[i];
+              if (!resourceData || !config) continue;
+
+              let decrypted = resourceData.split("").reverse().join("");
+              decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, "");
+              let rawUrl = atob(decrypted);
+
+              const indexKey = atob(config.k);
+              const paramOffset = config.d[parseInt(indexKey, 10)];
+              rawUrl = rawUrl.slice(0, -paramOffset);
+
+              const serverUrl = rawUrl.trim();
+              if (/dailymotion\.com/.test(serverUrl)) {
+                const stream = await handleDailymotion(serverUrl);
+                if (stream) servers.push(stream);
+              } else if (/streamwish\.to/.test(serverUrl)) {
+                const stream = await handleStreamwish(serverUrl);
+                if (stream) servers.push(stream);
+              }
+            }
+          } catch (e) {
+            console.error("Error decoding _zG/_zH:", e.message);
           }
-          return [];
-        }
-
-        const resourceRegistry = JSON.parse(atob(zGMatch[1]));
-        const configRegistry = JSON.parse(atob(zHMatch[1]));
-
-        const serverNames = {};
-        const serverLinks = html.matchAll(
-          /<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g
-        );
-        for (const match of serverLinks) {
-          serverNames[match[1]] = match[2].trim();
-        }
-
-        const servers = [];
-        for (let i = 0; i < 20; i++) {
-          const resourceData = resourceRegistry[i];
-          const config = configRegistry[i];
-          if (!resourceData || !config) continue;
-
-          let decrypted = resourceData.split("").reverse().join("");
-          decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, "");
-          let rawUrl = atob(decrypted);
-
-          const indexKey = atob(config.k);
-          const paramOffset = config.d[parseInt(indexKey, 10)];
-          rawUrl = rawUrl.slice(0, -paramOffset);
-
-          servers.push({
-            id: i,
-            name: serverNames[i] || `Unknown Server ${i}`,
-            url: rawUrl.trim(),
-          });
         }
 
         return servers;
@@ -257,57 +339,29 @@ async function extractStreamUrl(url) {
       }
     }
 
-    // ==== Handle Specific Servers ====
-    async function handleServer(server) {
-      if (/vidstream/.test(server.url)) {
-        const html = await httpGet(server.url);
-        const videoMatch = html.match(/<source src="([^"]+)"/);
-        return videoMatch ? { name: "Vidstream", url: videoMatch[1] } : null;
-      }
-      // أضف دعم لسيرفرات أخرى هنا
-      return server;
-    }
-
     // ==== Main Extraction ====
     const html = await httpGet(url);
-    let servers = decodeStreamingServers(html);
+    const servers = await decodeStreamingServers(html);
 
     if (!servers.length) {
-      return fallbackUrl("⚠️ لم يتم استخراج أي سيرفر من الصفحة");
+      return fallbackUrl("⚠️ لم يتم استخراج أي سيرفر من Dailymotion أو Streamwish");
     }
 
-    let multiStreams = [];
-    for (const s of servers) {
-      try {
-        if (!(await checkUrlValidity(s.url))) {
-          console.warn(`Invalid URL for server ${s.name}: ${s.url}`);
-          continue;
-        }
-
-        const processedServer = await handleServer(s);
-        if (!processedServer) continue;
-
-        if (/ok\.ru/.test(processedServer.url)) {
-          multiStreams.push({ name: "Ok.ru", url: processedServer.url });
-        } else if (/drive\.google/.test(processedServer.url)) {
-          multiStreams.push({ name: "Google Drive", url: processedServer.url });
-        } else if (/mp4upload/.test(processedServer.url)) {
-          multiStreams.push({ name: "Mp4Upload", url: processedServer.url });
-        } else if (/mega\.nz/.test(processedServer.url)) {
-          multiStreams.push({ name: "Mega.nz", url: processedServer.url });
-        } else {
-          multiStreams.push({ name: processedServer.name, url: processedServer.url });
-        }
-      } catch (err) {
-        console.error(`Error processing server ${s.name}:`, err.message);
+    const validStreams = [];
+    for (const server of servers) {
+      if (await checkUrlValidity(server.url)) {
+        validStreams.push(server);
+      } else {
+        console.warn(`Invalid URL for server ${server.name}: ${server.url}`);
       }
     }
 
-    if (!multiStreams.length) {
-      return fallbackUrl("⚠️ كل السيرفرات فشلت في الاستخراج");
+    if (!validStreams.length) {
+      return fallbackUrl("⚠️ كل السيرفرات فشلت في الاستخراج أو غير صالحة");
     }
 
-    return soraPrompt("اختر السيرفر المناسب:", multiStreams);
+    // رجّع أول رابط صالح بدل كائن
+    return validStreams[0].url;
   } catch (error) {
     console.error("extractStreamUrl error:", error.message, error.stack);
     return fallbackUrl("⚠️ حدث خطأ غير متوقع أثناء الاستخراج");
