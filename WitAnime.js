@@ -172,6 +172,17 @@ async function extractStreamUrl(url) {
       return await res.text();
     }
 
+    function fallbackUrl(msg) {
+      return [{ name: "Fallback", url: "", error: msg }];
+    }
+
+    function soraPrompt(message, streams) {
+      return {
+        message,
+        streams,
+      };
+    }
+
     // ==== Embedded decoder ====
     function decodeStreamingServers(html) {
       try {
@@ -230,13 +241,12 @@ async function extractStreamUrl(url) {
     for (const s of servers) {
       try {
         if (/ok\.ru/.test(s.url)) {
-          multiStreams.push(await okruExtractor(s.url));
+          multiStreams.push({ name: "Ok.ru", url: s.url });
         } else if (/drive\.google/.test(s.url)) {
-          multiStreams.push(await gdriveExtractor(s.url));
+          multiStreams.push({ name: "Google Drive", url: s.url });
         } else if (/mp4upload/.test(s.url)) {
-          multiStreams.push(await mp4uploadExtractor(s.url));
+          multiStreams.push({ name: "Mp4Upload", url: s.url });
         } else if (/mega\.nz/.test(s.url)) {
-          // mega extractor placeholder
           multiStreams.push({ name: "Mega.nz", url: s.url });
         } else {
           multiStreams.push({ name: s.name, url: s.url });
