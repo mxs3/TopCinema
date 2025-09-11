@@ -177,10 +177,7 @@ async function extractStreamUrl(url) {
     }
 
     function soraPrompt(message, streams) {
-      return {
-        message,
-        streams,
-      };
+      return { message, streams };
     }
 
     // ==== Embedded decoder ====
@@ -221,48 +218,119 @@ async function extractStreamUrl(url) {
             url: rawUrl.trim(),
           });
         }
-
         return servers;
-      } catch (e) {
+      } catch {
         return [];
       }
     }
 
-    // ==== Main Extraction ====
-    const html = await httpGet(url);
-    const servers = decodeStreamingServers(html);
+    // ==== Extractors ====
+    async function extractDailymotion(embedUrl) {
+      try {
+        let videoId = null;
+        const patterns = [
+          /dailymotion\.com\/video\/([a-zA-Z0-9]+)/,
+          /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/,
+          /[?&]video=([a-zA-Z0-9]+)/
+        ];
+        for (const p of patterns) {
+          const m = embedUrl.match(p);
+          if (m) { videoId = m[1]; break; }
+        }
+        if (!videoId) return embedUrl;
 
-    if (!servers.length) {
-      return fallbackUrl("⚠️ لم يتم استخراج أي سيرفر من الصفحة");
+        const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`);
+        const metaJson = await metaRes.json();
+        const hlsLink = metaJson.qualities?.auto?.[0]?.url;
+        if (!hlsLink) return embedUrl;
+
+        const res = await fetch(hlsLink);
+        const text = await res.text();
+        const regex = /#EXT-X-STREAM-INF:.*RESOLUTION=\d+x(\d+).*?\n(https?:\/\/[^\n]+)/g;
+        const streams = [];
+        let m;
+        while ((m = regex.exec(text)) !== null) {
+          streams.push({ h: parseInt(m[1]), url: m[2] });
+        }
+        if (streams.length) {
+          streams.sort((a,b)=>b.h-a.h);
+          return streams[0].url;
+        }
+        return hlsLink;
+      } catch {
+        return embedUrl;
+      }
     }
 
-    let multiStreams = [];
+    async function extractOkru(embedUrl) {
+      try {
+        const html = await httpGet(embedUrl);
+        const m3u8Match = html.match(/"(https:[^"]+m3u8[^"]*)"/);
+        return m3u8Match ? m3u8Match[1] : embedUrl;
+      } catch {
+        return embedUrl;
+      }
+    }
 
+    async function extractGoogleDrive(embedUrl) {
+      try {
+        const idMatch = embedUrl.match(/\/d\/([^/]+)\//);
+        if (!idMatch) return embedUrl;
+        const fileId = idMatch[1];
+        return `https://drive.google.com/uc?export=download&id=${fileId}`;
+      } catch {
+        return embedUrl;
+      }
+    }
+
+    async function extractMp4upload(embedUrl) {
+      try {
+        const html = await httpGet(embedUrl);
+        const match = html.match(/src:\s*"([^"]+)",/);
+        return match ? match[1] : embedUrl;
+      } catch {
+        return embedUrl;
+      }
+    }
+
+    async function extractMega(embedUrl) {
+      // Placeholder: mega extraction usually needs crypto lib
+      return embedUrl;
+    }
+
+    // ==== Main ====
+    const html = await httpGet(url);
+    const servers = decodeStreamingServers(html);
+    if (!servers.length) return fallbackUrl("⚠️ لم يتم استخراج أي سيرفر من الصفحة");
+
+    let multiStreams = [];
     for (const s of servers) {
       try {
-        if (/ok\.ru/.test(s.url)) {
-          multiStreams.push({ name: "Ok.ru", url: s.url });
+        let final = s.url;
+        if (/dailymotion/.test(s.url)) {
+          final = await extractDailymotion(s.url);
+        } else if (/ok\.ru/.test(s.url)) {
+          final = await extractOkru(s.url);
         } else if (/drive\.google/.test(s.url)) {
-          multiStreams.push({ name: "Google Drive", url: s.url });
+          final = await extractGoogleDrive(s.url);
         } else if (/mp4upload/.test(s.url)) {
-          multiStreams.push({ name: "Mp4Upload", url: s.url });
+          final = await extractMp4upload(s.url);
         } else if (/mega\.nz/.test(s.url)) {
-          multiStreams.push({ name: "Mega.nz", url: s.url });
-        } else {
-          multiStreams.push({ name: s.name, url: s.url });
+          final = await extractMega(s.url);
         }
+        multiStreams.push({ name: s.name, url: final });
       } catch (err) {
-        console.log("❌ Error extracting from server:", s.name, err);
+        console.log("❌ Error extracting from", s.name, err);
       }
     }
 
     if (!multiStreams.length) {
       return fallbackUrl("⚠️ كل السيرفرات فشلت في الاستخراج");
     }
-
     return soraPrompt("اختر السيرفر المناسب:", multiStreams);
+
   } catch (error) {
     console.log("extractStreamUrl error:", error);
-    return fallbackUrl("⚠️ حدث خطأ غير متوقع أثناء الاستخراج");
+    return [{ name: "Fallback", url: "", error: "⚠️ خطأ غير متوقع" }];
   }
 }
