@@ -392,32 +392,30 @@ function unpack(source) {
     }
     source = payload.replace(/\b\w+\b/g, lookup);
     return _replacestrings(source);
+
     function _filterargs(source) {
         const juicers = [
-            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$, *(\d+), *(.*)\)\)/,
-            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$/,
+            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\), *\d+, *.*\)\)/,
+            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\)/,
         ];
         for (const juicer of juicers) {
             const args = juicer.exec(source);
             if (args) {
-                let a = args;
-                if (a[2] == "[]") {
-                }
                 try {
                     return {
-                        payload: a[1],
-                        symtab: a[4].split("|"),
-                        radix: parseInt(a[2]),
-                        count: parseInt(a[3]),
+                        payload: args[1],
+                        symtab: args[4].split("|"),
+                        radix: parseInt(args[2]),
+                        count: parseInt(args[3]),
                     };
-                }
-                catch (ValueError) {
+                } catch {
                     throw Error("Corrupted p.a.c.k.e.r. data.");
                 }
             }
         }
         throw Error("Could not make sense of p.a.c.k.e.r data (unexpected code structure)");
     }
+
     function _replacestrings(source) {
         return source;
     }
