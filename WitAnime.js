@@ -273,87 +273,66 @@ class Unbaser {
     constructor(base) {
         this.ALPHABET = {
             62: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
-            95: "' !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~'",
+            95: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
         };
         this.dictionary = {};
         this.base = base;
+
         if (36 < base && base < 62) {
-            this.ALPHABET[base] = this.ALPHABET[base] ||
-                this.ALPHABET[62].substr(0, base);
+            this.ALPHABET[base] = this.ALPHABET[62].substr(0, base);
         }
+
         if (2 <= base && base <= 36) {
             this.unbase = (value) => parseInt(value, base);
         } else {
-            try {
-                [...this.ALPHABET[base]].forEach((cipher, index) => {
-                    this.dictionary[cipher] = index;
-                });
-            } catch (er) {
-                throw Error("Unsupported base encoding.");
+            for (let i = 0; i < this.ALPHABET[base].length; i++) {
+                this.dictionary[this.ALPHABET[base][i]] = i;
             }
             this.unbase = this._dictunbaser;
         }
     }
+
     _dictunbaser(value) {
-        let ret = 0;
-        [...value].reverse().forEach((cipher, index) => {
-            ret += (Math.pow(this.base, index)) * this.dictionary[cipher];
-        });
-        return ret;
+        return value
+            .split("")
+            .reverse()
+            .reduce((acc, cipher, idx) => acc + this.dictionary[cipher] * Math.pow(this.base, idx), 0);
     }
 }
 
 function detect(source) {
-    return source.replace(" ", "").startsWith("eval(function(p,a,c,k,e,");
+    return source.replace(/\s+/g, "").startsWith("eval(function(p,a,c,k,e,");
 }
 
 function unpack(source) {
-    let { payload, symtab, radix, count } = _filterargs(source);
-    if (count != symtab.length) {
-        throw Error("Malformed p.a.c.k.e.r. symtab.");
-    }
-    let unbase;
-    try {
-        unbase = new Unbaser(radix);
-    } catch (e) {
-        throw Error("Unknown p.a.c.k.e.r. encoding.");
-    }
-    function lookup(match) {
-        const word = match;
-        let word2;
-        if (radix == 1) {
-            word2 = symtab[parseInt(word)];
-        } else {
-            word2 = symtab[unbase.unbase(word)];
-        }
-        return word2 || word;
-    }
-    source = payload.replace(/\b\w+\b/g, lookup);
-    return _replacestrings(source);
+    const args = _filterargs(source);
+    let { payload, symtab, radix, count } = args;
 
-    function _filterargs(source) {
-        const juicers = [
-            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$, *(\d+), *(.*)\)\)/,
-            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$/,
-        ];
-        for (const juicer of juicers) {
-            const args = juicer.exec(source);
-            if (args) {
-                try {
-                    return {
-                        payload: args[1],
-                        symtab: args[4].split("|"),
-                        radix: parseInt(args[2]),
-                        count: parseInt(args[3]),
-                    };
-                } catch {
-                    throw Error("Corrupted p.a.c.k.e.r. data.");
-                }
-            }
-        }
-        throw Error("Could not parse p.a.c.k.e.r data");
+    if (count !== symtab.length) throw new Error("Malformed p.a.c.k.e.r. symtab.");
+
+    const unbase = new Unbaser(radix);
+
+    function lookup(word) {
+        const index = radix === 1 ? parseInt(word, 10) : unbase.unbase(word);
+        return symtab[index] || word;
     }
-    function _replacestrings(source) {
-        return source;
-    }
+
+    const result = payload.replace(/\b\w+\b/g, lookup);
+    return result;
+}
+
+function _filterargs(source) {
+    const juicer = /eval$begin:math:text$function\\(p,a,c,k,e,[^)]*$end:math:text$\{.*\}$begin:math:text$(.+)$end:math:text$\)/s;
+    const args = juicer.exec(source);
+    if (!args) throw new Error("Could not parse p.a.c.k.e.r data");
+
+    const [payload, radix, count, symtabStr] = args[1].split(",");
+    return {
+        payload: payload.replace(/^\s*'([^']+)'$/, "$1"),
+        radix: parseInt(radix),
+        count: parseInt(count),
+        symtab: symtabStr
+            .replace(/^\s*'([^']+)'\.split$begin:math:text$'\\|'$end:math:text$\s*$/, "$1")
+            .split("|"),
+    };
 }
