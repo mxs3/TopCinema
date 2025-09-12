@@ -156,55 +156,64 @@ async function extractEpisodes(url) {
 // =========================================================================
 // ==== Sora stream ========================================================
 async function extractStreamUrl(url) {
-  try {
-    // ==== Utilities ====
-    async function httpGet(u, headers = {}) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      try {
-        const res = await fetch(u, {
-          headers: Object.assign(
-            {
-              "User-Agent":
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
-              Referer: u,
-              Origin: new URL(u).origin,
-              "Accept-Language": "en-US,en;q=0.9",
-            },
-            headers
-          ),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-        return await res.text();
-      } catch (err) {
-        clearTimeout(timeoutId);
-        console.error(`HTTP Error for ${u}:`, err.message);
-        throw err;
-      }
-    }
+    try {
+        const response = await fetchv2(url);
+        const html = await response.text();
 
-    async function checkUrlValidity(url) {
-      try {
-        const response = await fetch(url, { method: "HEAD" });
-        return response.ok;
-      } catch {
-        return false;
-      }
-    }
+        // جرّب Streamwish الأول
+        try {
+            const sw = await streamwishExtractor(html, url);
+            if (sw) {
+                console.log("Streamwish Stream URL: " + sw);
+                return sw;
+            }
+        } catch (error) {
+            console.log("Streamwish extraction error:", error);
+        }
 
-    function fallbackUrl(msg) {
-      return { name: "Fallback", url: "", error: msg };
-    }
+        // جرّب Dailymotion بعده
+        try {
+            const dm = await extractDailymotion(url);
+            if (dm) {
+                console.log("Dailymotion Stream URL: " + dm);
+                return dm;
+            }
+        } catch (error) {
+            console.log("Dailymotion extraction error:", error);
+        }
 
-    // ==== Handle Specific Servers ====
-    async function extractDailymotion(url) {
+        console.log("No stream URL found, fallback triggered");
+        return "https://files.catbox.moe/avolvc.mp4";
+    } catch (error) {
+        console.log("Fetch error:", error);
+        return "https://files.catbox.moe/avolvc.mp4";
+    }
+}
+
+/* ============================================================
+   =============== STREAMWISH EXTRACTOR =======================
+   ============================================================ */
+async function streamwishExtractor(data, url = null) {
+    const obfuscatedScript = data.match(/<script[^>]*>\s*(eval\(function\(p,a,c,k,e,d.*?\)[\s\S]*?)<\/script>/);
+    if (!obfuscatedScript) return null;
+
+    const unpackedScript = unpack(obfuscatedScript[1]);
+    const m3u8Match = unpackedScript.match(/file:"(https?:\/\/.*?\.m3u8.*?)"/);
+    if (m3u8Match) return m3u8Match[1];
+
+    return null;
+}
+
+/* ============================================================
+   =============== DAILYMOTION EXTRACTOR =======================
+   ============================================================ */
+async function extractDailymotion(url) {
     try {
         let videoId = null;
         const patterns = [
-            /dailymotion\.com\/video\/([a-zA-Z0-9]+)/,          
-            /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/,    
-            /[?&]video=([a-zA-Z0-9]+)/                          
+            /dailymotion\.com\/video\/([a-zA-Z0-9]+)/,
+            /dailymotion\.com\/embed\/video\/([a-zA-Z0-9]+)/,
+            /[?&]video=([a-zA-Z0-9]+)/
         ];
         for (const p of patterns) {
             const match = url.match(p);
@@ -215,13 +224,13 @@ async function extractStreamUrl(url) {
         }
         if (!videoId) {
             console.log("Invalid Dailymotion URL");
-            return JSON.stringify({ streams: [], subtitles: "" });
+            return null;
         }
 
         const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`);
         const metaJson = await metaRes.json();
         const hlsLink = metaJson.qualities?.auto?.[0]?.url;
-        if (!hlsLink) return JSON.stringify({ streams: [], subtitles: "" });
+        if (!hlsLink) return null;
 
         async function getBestHls(hlsUrl) {
             try {
@@ -249,130 +258,22 @@ async function extractStreamUrl(url) {
             subtitles: subtitles
         };
 
-        console.log("Extracted Dailymotion result:" + JSON.stringify(result));
-        return JSON.stringify(result);
+        console.log("Extracted Dailymotion result:", result);
+        return bestHls;
     } catch {
-        const empty = { streams: [], subtitles: "" };
-        console.log("Extracted Dailymotion result:" + JSON.stringify(empty));
-        return JSON.stringify(empty);
+        console.log("Dailymotion extractor failed");
+        return null;
     }
 }
 
-    async function handleStreamwish(url) {
-      try {
-        const html = await httpGet(url);
-        const videoMatch = html.match(/<source[^>]+src="([^"]+)"/);
-        if (videoMatch && (await checkUrlValidity(videoMatch[1]))) {
-          return { name: "Streamwish", url: videoMatch[1] };
-        }
-        return null;
-      } catch (err) {
-        console.error("Error extracting Streamwish:", err.message);
-        return null;
-      }
-    }
-
-    // ==== Embedded decoder ====
-    async function decodeStreamingServers(html) {
-      try {
-        // فحص إذا كان فيه iframes تحتوي على السيرفرات
-        const iframeMatches = html.matchAll(/<iframe[^>]+src="([^"]+)"/g);
-        const servers = [];
-        for (const match of iframeMatches) {
-          const iframeUrl = match[1];
-          if (/dailymotion\.com/.test(iframeUrl)) {
-            const stream = await extractDailymotion(iframeUrl);
-            if (stream) servers.push(stream);
-          } else if (/streamwish\.to/.test(iframeUrl)) {
-            const stream = await handleStreamwish(iframeUrl);
-            if (stream) servers.push(stream);
-          }
-        }
-
-        // فحص _zG و _zH لو موجودين
-        const zGMatch = html.match(/var _zG="([^"]+)";/);
-        const zHMatch = html.match(/var _zH="([^"]+)";/);
-        if (zGMatch && zHMatch) {
-          try {
-            const resourceRegistry = JSON.parse(atob(zGMatch[1]));
-            const configRegistry = JSON.parse(atob(zHMatch[1]));
-
-            const serverNames = {};
-            const serverLinks = html.matchAll(
-              /<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g
-            );
-            for (const match of serverLinks) {
-              serverNames[match[1]] = match[2].trim();
-            }
-
-            for (let i = 0; i < 20; i++) {
-              const resourceData = resourceRegistry[i];
-              const config = configRegistry[i];
-              if (!resourceData || !config) continue;
-
-              let decrypted = resourceData.split("").reverse().join("");
-              decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, "");
-              let rawUrl = atob(decrypted);
-
-              const indexKey = atob(config.k);
-              const paramOffset = config.d[parseInt(indexKey, 10)];
-              rawUrl = rawUrl.slice(0, -paramOffset);
-
-              const serverUrl = rawUrl.trim();
-              if (/dailymotion\.com/.test(serverUrl)) {
-                const stream = await handleDailymotion(serverUrl);
-                if (stream) servers.push(stream);
-              } else if (/streamwish\.to/.test(serverUrl)) {
-                const stream = await handleStreamwish(serverUrl);
-                if (stream) servers.push(stream);
-              }
-            }
-          } catch (e) {
-            console.error("Error decoding _zG/_zH:", e.message);
-          }
-        }
-
-        return servers;
-      } catch (e) {
-        console.error("Error decoding servers:", e.message);
-        return [];
-      }
-    }
-
-    // ==== Main Extraction ====
-    const html = await httpGet(url);
-    const servers = await decodeStreamingServers(html);
-
-    if (!servers.length) {
-      return fallbackUrl("⚠️ لم يتم استخراج أي سيرفر من Dailymotion أو Streamwish");
-    }
-
-    const validStreams = [];
-    for (const server of servers) {
-      if (await checkUrlValidity(server.url)) {
-        validStreams.push(server);
-      } else {
-        console.warn(`Invalid URL for server ${server.name}: ${server.url}`);
-      }
-    }
-
-    if (!validStreams.length) {
-      return fallbackUrl("⚠️ كل السيرفرات فشلت في الاستخراج أو غير صالحة");
-    }
-
-    // رجّع أول رابط صالح بدل كائن
-    return validStreams[0].url;
-  } catch (error) {
-    console.error("extractStreamUrl error:", error.message, error.stack);
-    return fallbackUrl("⚠️ حدث خطأ غير متوقع أثناء الاستخراج");
-  }
-}
-
+/* ============================================================
+   =============== HELPER FUNCTIONS (UNPACK) ==================
+   ============================================================ */
 class Unbaser {
     constructor(base) {
         this.ALPHABET = {
             62: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
-            95: "' !\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~'",
+            95: "' !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~'",
         };
         this.dictionary = {};
         this.base = base;
@@ -382,14 +283,12 @@ class Unbaser {
         }
         if (2 <= base && base <= 36) {
             this.unbase = (value) => parseInt(value, base);
-        }
-        else {
+        } else {
             try {
                 [...this.ALPHABET[base]].forEach((cipher, index) => {
                     this.dictionary[cipher] = index;
                 });
-            }
-            catch (er) {
+            } catch (er) {
                 throw Error("Unsupported base encoding.");
             }
             this.unbase = this._dictunbaser;
@@ -398,7 +297,7 @@ class Unbaser {
     _dictunbaser(value) {
         let ret = 0;
         [...value].reverse().forEach((cipher, index) => {
-            ret = ret + ((Math.pow(this.base, index)) * this.dictionary[cipher]);
+            ret += (Math.pow(this.base, index)) * this.dictionary[cipher];
         });
         return ret;
     }
@@ -416,8 +315,7 @@ function unpack(source) {
     let unbase;
     try {
         unbase = new Unbaser(radix);
-    }
-    catch (e) {
+    } catch (e) {
         throw Error("Unknown p.a.c.k.e.r. encoding.");
     }
     function lookup(match) {
@@ -425,48 +323,37 @@ function unpack(source) {
         let word2;
         if (radix == 1) {
             word2 = symtab[parseInt(word)];
-        }
-        else {
+        } else {
             word2 = symtab[unbase.unbase(word)];
         }
         return word2 || word;
     }
     source = payload.replace(/\b\w+\b/g, lookup);
     return _replacestrings(source);
+
     function _filterargs(source) {
         const juicers = [
-            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\), *(\d+), *(.*)\)\)/,
-            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\)/,
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$, *(\d+), *(.*)\)\)/,
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$/,
         ];
         for (const juicer of juicers) {
             const args = juicer.exec(source);
             if (args) {
-                let a = args;
-                if (a[2] == "[]") {
-                }
                 try {
                     return {
-                        payload: a[1],
-                        symtab: a[4].split("|"),
-                        radix: parseInt(a[2]),
-                        count: parseInt(a[3]),
+                        payload: args[1],
+                        symtab: args[4].split("|"),
+                        radix: parseInt(args[2]),
+                        count: parseInt(args[3]),
                     };
-                }
-                catch (ValueError) {
+                } catch {
                     throw Error("Corrupted p.a.c.k.e.r. data.");
                 }
             }
         }
-        throw Error("Could not make sense of p.a.c.k.e.r data (unexpected code structure)");
+        throw Error("Could not parse p.a.c.k.e.r data");
     }
     function _replacestrings(source) {
         return source;
     }
-}
-
-async function c(data, url = null) {
-    const srcMatch = data.match(/src:\s*"([^"]+\.mp4)"/);
-    const srcUrl = srcMatch ? srcMatch[1] : null;
-
-    return srcUrl;
 }
