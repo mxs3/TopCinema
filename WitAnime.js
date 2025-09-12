@@ -173,13 +173,11 @@ async function extractStreamUrl(url) {
             "dailymotion"
         ];
 
-        // ترتّب السيرفرات حسب الأولويات اللي انت محددها
         const ordered = [];
         for (const provider of priorities) {
             const found = servers.filter(s => s.name.toLowerCase().includes(provider));
             for (const f of found) ordered.push(f);
         }
-        // لو مفيش حسب الأولوية، نضيف الباقي اللي اتعرفوا
         for (const s of servers) {
             if (!ordered.some(x => x.id === s.id)) ordered.push(s);
         }
@@ -188,7 +186,6 @@ async function extractStreamUrl(url) {
             throw new Error("No servers detected on page");
         }
 
-        // نجرب كل سيرفر ونشوف أي واحد بيرجع جودات
         const workingServers = [];
         for (const srv of ordered) {
             try {
@@ -198,11 +195,10 @@ async function extractStreamUrl(url) {
                 const name = (srv.name || "").toLowerCase();
 
                 if (name.includes("streamwish")) {
-                    // streamwish uses hgplaycdn pattern in your original
                     const newUrl = "https://hgplaycdn.com/e/" + srv.url.replace(/^https?:\/\/[^/]+\/e\//, '');
                     const res = await fetchv2(newUrl);
                     const html = await res.text();
-                    qualities = await b(html); // now returns array
+                    qualities = await b(html);
                 } else if (name.includes("playerwish")) {
                     const res = await fetchv2(srv.url);
                     const html = await res.text();
@@ -210,15 +206,13 @@ async function extractStreamUrl(url) {
                 } else if (name.includes("mp4upload")) {
                     const res = await fetchv2(srv.url);
                     const html = await res.text();
-                    qualities = await c(html); // returns array
+                    qualities = await c(html);
                 } else if (name.includes("dailymotion")) {
-                    qualities = await extractDailymotion(srv.url); // returns array
+                    qualities = await extractDailymotion(srv.url);
                 } else {
-                    // محاولة عامة: جرب تجيب الصفحة وفك أي HLS موجود
                     try {
                         const res = await fetchv2(srv.url);
                         const html = await res.text();
-                        // حاول تلقائياً فك HLS أو MP4
                         const maybe = await tryGenericExtract(html, srv.url);
                         qualities = maybe;
                     } catch (e) {
@@ -233,7 +227,6 @@ async function extractStreamUrl(url) {
                         url: srv.url,
                         qualities
                     });
-                    // لا نكسر فوراً — نبني قايمة بكل السيرفرات الشغالة
                 } else {
                     console.log("Server produced no qualities:", srv.name);
                 }
@@ -246,31 +239,44 @@ async function extractStreamUrl(url) {
             throw new Error("No working servers found");
         }
 
-        // لو لقى أكتر من سيرفر شغال نسألك تختار
+        // --- اسأل المستخدم يختار السيرفر ---
         let finalServer;
         if (workingServers.length === 1) {
             finalServer = workingServers[0];
         } else {
-            // اسأل المستخدم أي سيرفر يفضّل
             try {
                 const choice = await soraPrompt(
-                    "أوجدت أكثر من سيرفر شغال. أي واحد تحب تشغّل؟",
+                    "فيه أكتر من سيرفر شغال. اختار السيرفر اللي تحب تشغله:",
                     workingServers.map(s => s.name)
                 );
                 finalServer = workingServers.find(s => s.name === choice) || workingServers[0];
             } catch (e) {
-                // لو الفشل في soraPrompt نختار أول واحد
                 console.warn("soraPrompt failed, defaulting to first working server", e);
                 finalServer = workingServers[0];
             }
         }
 
-        // رجّع قائمة الجودات للسيرفر المحدد
-        return finalServer.qualities;
+        // --- اسأل المستخدم يختار الجودة ---
+        let finalQuality;
+        if (finalServer.qualities.length === 1) {
+            finalQuality = finalServer.qualities[0];
+        } else {
+            try {
+                const choice = await soraPrompt(
+                    `السيرفر (${finalServer.name}) عنده أكتر من جودة. اختار الجودة:`,
+                    finalServer.qualities.map(q => q.quality)
+                );
+                finalQuality = finalServer.qualities.find(q => q.quality === choice) || finalServer.qualities[0];
+            } catch (e) {
+                console.warn("soraPrompt failed, defaulting to first quality", e);
+                finalQuality = finalServer.qualities[0];
+            }
+        }
+
+        return [{ quality: finalQuality.quality, url: finalQuality.url }];
 
     } catch (err) {
         console.error("extractStreamUrl failed:", err);
-        // لو عايز ترجع مصفوفة فارغة بدل ملف افتراضي غيرني هنا
         return [{ quality: "fallback", url: "https://files.catbox.moe/avolvc.mp4" }];
     }
 }
