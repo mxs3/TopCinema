@@ -172,28 +172,11 @@ async function extractStreamUrl(url) {
         ];
 
         let chosenServer = null;
-
-        // === أول حاجة نخلي المستخدم يختار لو فيه سيرفرات ===
-        if (servers.length > 0) {
-            try {
-                const choice = await soraPrompt(
-                    "اختر السيرفر اللي تحب تشغله:",
-                    servers.map(s => s.name)
-                );
-                chosenServer = servers.find(s => s.name === choice);
-            } catch (e) {
-                console.warn("soraPrompt failed, falling back to priorities:", e);
-            }
-        }
-
-        // === fallback للأولوية لو المستخدم ما اختارش ===
-        if (!chosenServer) {
-            for (const provider of priorities) {
-                chosenServer = servers.find(s =>
-                    s.name.toLowerCase().includes(provider)
-                );
-                if (chosenServer) break;
-            }
+        for (const provider of priorities) {
+            chosenServer = servers.find(s =>
+                s.name.toLowerCase().includes(provider)
+            );
+            if (chosenServer) break;
         }
 
         if (!chosenServer) {
@@ -412,8 +395,8 @@ function unpack(source) {
 
     function _filterargs(source) {
         const juicers = [
-            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$, *\d+, *.*\)\)/,
-            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$/,
+            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\), *\d+, *.*\)\)/,
+            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\)/,
         ];
         for (const juicer of juicers) {
             const args = juicer.exec(source);
