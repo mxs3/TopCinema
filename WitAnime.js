@@ -171,47 +171,48 @@ async function extractStreamUrl(url) {
             "dailymotion"
         ];
 
-        let chosenServer = null;
-        for (const provider of priorities) {
-            chosenServer = servers.find(s =>
-                s.name.toLowerCase().includes(provider)
+        // لو لقيت سيرفرات متاحة نخلي المستخدم يختار
+        if (servers.length > 0) {
+            const choice = await soraPrompt(
+                "اختر السيرفر اللي تحب تشغله:",
+                servers.map(s => s.name)
             );
-            if (chosenServer) break;
+            const chosenServer = servers.find(s => s.name === choice);
+
+            if (chosenServer) {
+                const streamUrl = chosenServer.url;
+                const name = chosenServer.name.toLowerCase();
+
+                if (name.includes("streamwish")) {
+                    const newUrl = "https://hgplaycdn.com/e/" + streamUrl.replace(/^https?:\/\/[^/]+\/e\//, '');
+                    const response = await fetchv2(newUrl);
+                    const html = await response.text();
+                    const result = await b(html);
+                    return result;
+
+                } else if (name.includes("mp4upload")) {
+                    const response = await fetchv2(streamUrl);
+                    const html = await response.text();
+                    const result = await c(html);
+                    return result;
+
+                } else if (name.includes("playerwish")) {
+                    const response = await fetchv2(streamUrl);
+                    const html = await response.text();
+                    const result = await b(html);
+                    return result;
+
+                } else if (name.includes("dailymotion")) {
+                    const result = await extractDailymotion(streamUrl);
+                    return result;
+
+                } else {
+                    throw new Error("Unsupported provider: " + chosenServer.name);
+                }
+            }
         }
 
-        if (!chosenServer) {
-            throw new Error("No valid server found");
-        }
-
-        const streamUrl = chosenServer.url;
-        const name = chosenServer.name.toLowerCase();
-
-        if (name.includes("streamwish")) {
-            const newUrl = "https://hgplaycdn.com/e/" + streamUrl.replace(/^https?:\/\/[^/]+\/e\//, '');
-            const response = await fetchv2(newUrl);
-            const html = await response.text();
-            const result = await b(html);
-            return result;
-
-        } else if (name.includes("mp4upload")) {
-            const response = await fetchv2(streamUrl);
-            const html = await response.text();
-            const result = await c(html);
-            return result;
-
-        } else if (name.includes("playerwish")) {
-            const response = await fetchv2(streamUrl);
-            const html = await response.text();
-            const result = await b(html);
-            return result;
-
-        } else if (name.includes("dailymotion")) {
-            const result = await extractDailymotion(streamUrl);
-            return result;
-
-        } else {
-            throw new Error("Unsupported provider: " + chosenServer.name);
-        }
+        throw new Error("No valid server found");
     } catch (err) {
         console.error(err);
         return "https://files.catbox.moe/avolvc.mp4";
@@ -395,8 +396,8 @@ function unpack(source) {
 
     function _filterargs(source) {
         const juicers = [
-            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\), *\d+, *.*\)\)/,
-            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\)/,
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$, *\d+, *.*\)\)/,
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$/,
         ];
         for (const juicer of juicers) {
             const args = juicer.exec(source);
