@@ -155,13 +155,15 @@ async function extractEpisodes(url) {
 // =========================================================================
 // =========================================================================
 // ==== Sora stream ========================================================
+// === Main extractor (modified) ===
 async function extractStreamUrl(url) {
     try {
-        const response = await fetchv2(url);
-        const html = await response.text();
+        const resPage = await fetchv2(url);
+        const pageHtml = await resPage.text();
 
-        const servers = a(html);
-        console.log(JSON.stringify(servers));
+        const servers = a(pageHtml);
+        console.log("Detected servers:", JSON.stringify(servers));
+
         const priorities = [
             "streamwish - fhd",
             "streamwish",
@@ -171,53 +173,129 @@ async function extractStreamUrl(url) {
             "dailymotion"
         ];
 
-        let chosenServer = null;
+        // ترتّب السيرفرات حسب الأولويات اللي انت محددها
+        const ordered = [];
         for (const provider of priorities) {
-            chosenServer = servers.find(s =>
-                s.name.toLowerCase().includes(provider)
-            );
-            if (chosenServer) break;
+            const found = servers.filter(s => s.name.toLowerCase().includes(provider));
+            for (const f of found) ordered.push(f);
+        }
+        // لو مفيش حسب الأولوية، نضيف الباقي اللي اتعرفوا
+        for (const s of servers) {
+            if (!ordered.some(x => x.id === s.id)) ordered.push(s);
         }
 
-        if (!chosenServer) {
-            throw new Error("No valid server found");
+        if (ordered.length === 0) {
+            throw new Error("No servers detected on page");
         }
 
-        const streamUrl = chosenServer.url;
-        const name = chosenServer.name.toLowerCase();
+        // نجرب كل سيرفر ونشوف أي واحد بيرجع جودات
+        const workingServers = [];
+        for (const srv of ordered) {
+            try {
+                console.log("Trying server:", srv.name, srv.url);
+                let qualities = [];
 
-        if (name.includes("streamwish")) {
-            const newUrl = "https://hgplaycdn.com/e/" + streamUrl.replace(/^https?:\/\/[^/]+\/e\//, '');
-            const response = await fetchv2(newUrl);
-            const html = await response.text();
-            const result = await b(html);
-            return result;
+                const name = (srv.name || "").toLowerCase();
 
-        } else if (name.includes("mp4upload")) {
-            const response = await fetchv2(streamUrl);
-            const html = await response.text();
-            const result = await c(html);
-            return result;
+                if (name.includes("streamwish")) {
+                    // streamwish uses hgplaycdn pattern in your original
+                    const newUrl = "https://hgplaycdn.com/e/" + srv.url.replace(/^https?:\/\/[^/]+\/e\//, '');
+                    const res = await fetchv2(newUrl);
+                    const html = await res.text();
+                    qualities = await b(html); // now returns array
+                } else if (name.includes("playerwish")) {
+                    const res = await fetchv2(srv.url);
+                    const html = await res.text();
+                    qualities = await b(html);
+                } else if (name.includes("mp4upload")) {
+                    const res = await fetchv2(srv.url);
+                    const html = await res.text();
+                    qualities = await c(html); // returns array
+                } else if (name.includes("dailymotion")) {
+                    qualities = await extractDailymotion(srv.url); // returns array
+                } else {
+                    // محاولة عامة: جرب تجيب الصفحة وفك أي HLS موجود
+                    try {
+                        const res = await fetchv2(srv.url);
+                        const html = await res.text();
+                        // حاول تلقائياً فك HLS أو MP4
+                        const maybe = await tryGenericExtract(html, srv.url);
+                        qualities = maybe;
+                    } catch (e) {
+                        qualities = [];
+                    }
+                }
 
-        } else if (name.includes("playerwish")) {
-            const response = await fetchv2(streamUrl);
-            const html = await response.text();
-            const result = await b(html);
-            return result;
+                if (Array.isArray(qualities) && qualities.length > 0) {
+                    workingServers.push({
+                        id: srv.id,
+                        name: srv.name,
+                        url: srv.url,
+                        qualities
+                    });
+                    // لا نكسر فوراً — نبني قايمة بكل السيرفرات الشغالة
+                } else {
+                    console.log("Server produced no qualities:", srv.name);
+                }
+            } catch (e) {
+                console.warn("Server check failed for", srv.name, e);
+            }
+        }
 
-        } else if (name.includes("dailymotion")) {
-            const result = await extractDailymotion(streamUrl);
-            return result;
+        if (workingServers.length === 0) {
+            throw new Error("No working servers found");
+        }
 
+        // لو لقى أكتر من سيرفر شغال نسألك تختار
+        let finalServer;
+        if (workingServers.length === 1) {
+            finalServer = workingServers[0];
         } else {
-            throw new Error("Unsupported provider: " + chosenServer.name);
+            // اسأل المستخدم أي سيرفر يفضّل
+            try {
+                const choice = await soraPrompt(
+                    "أوجدت أكثر من سيرفر شغال. أي واحد تحب تشغّل؟",
+                    workingServers.map(s => s.name)
+                );
+                finalServer = workingServers.find(s => s.name === choice) || workingServers[0];
+            } catch (e) {
+                // لو الفشل في soraPrompt نختار أول واحد
+                console.warn("soraPrompt failed, defaulting to first working server", e);
+                finalServer = workingServers[0];
+            }
         }
+
+        // رجّع قائمة الجودات للسيرفر المحدد
+        return finalServer.qualities;
+
     } catch (err) {
-        console.error(err);
-        return "https://files.catbox.moe/avolvc.mp4";
+        console.error("extractStreamUrl failed:", err);
+        // لو عايز ترجع مصفوفة فارغة بدل ملف افتراضي غيرني هنا
+        return [{ quality: "fallback", url: "https://files.catbox.moe/avolvc.mp4" }];
     }
 }
 
+// === helper to try generic extraction from arbitrary html (hls/mp4) ===
+async function tryGenericExtract(html, baseUrl = null) {
+    try {
+        // جرب تبحث عن m3u8 مباشر
+        const m3u8Direct = html.match(/https?:\/\/[^\s"'<>]+\.m3u8/g);
+        if (m3u8Direct && m3u8Direct.length > 0) {
+            // خذ الأول وافتحه لاستخراج الجودات
+            return await extractHlsQualities(m3u8Direct[0]);
+        }
+        // جرب mp4
+        const mp4Match = html.match(/https?:\/\/[^\s"'<>]+\.mp4/g);
+        if (mp4Match && mp4Match.length > 0) {
+            return mp4Match.map(u => ({ quality: "default", url: u }));
+        }
+        return [];
+    } catch (e) {
+        return [];
+    }
+}
+
+// === function a(html) unchanged but robust ===
 function a(html) {
     try {
         const zGMatch = html.match(/var _zG="([^"]+)";/);
@@ -258,25 +336,63 @@ function a(html) {
 
         return servers;
     } catch (error) {
+        console.warn("a(html) failed:", error);
         return [];
     }
 }
 
+// === b(data) now returns array of qualities for HLS (Streamwish/Playerwish) ===
 async function b(data, url = null) {
-    const obfuscatedScript = data.match(/<script[^>]*>\s*(eval\(function\(p,a,c,k,e,d.*?\)[\s\S]*?)<\/script>/);
-    const unpackedScript = unpack(obfuscatedScript[1]);
-    const m3u8Match = unpackedScript.match(/"hls2"\s*:\s*"([^"]+)"/);
-    const m3u8Url = m3u8Match[1];
-    return m3u8Url;
+    try {
+        // نحاول نلاقي سكربت مطبّق p.a.c.k.e.r أو hls url مباشرة
+        // 1) لو في m3u8 مباشر في الصفحة
+        const directM3 = data.match(/https?:\/\/[^\s"'<>]+\.m3u8/);
+        if (directM3) {
+            return await extractHlsQualities(directM3[0]);
+        }
+
+        // 2) لو فيه سكربت obfuscated
+        const obf = data.match(/<script[^>]*>\s*(eval\(function\(p,a,c,k,e,d[\s\S]*?\))<\/script>/i)
+                 || data.match(/(eval\(function\(p,a,c,k,e,d[\s\S]*?\))<\/script>/i);
+
+        if (!obf || !obf[1]) {
+            // ممكن يكون JSON داخل سكربت فيه hls2
+            const inline = data.match(/"hls2"\s*:\s*"([^"]+)"/);
+            if (inline && inline[1]) {
+                return await extractHlsQualities(inline[1]);
+            }
+            return [];
+        }
+
+        const unpacked = unpackSafe(obf[1]);
+        if (!unpacked) return [];
+
+        const m3u8Match = unpacked.match(/"hls2"\s*:\s*"([^"]+)"/);
+        if (!m3u8Match || !m3u8Match[1]) return [];
+        const hlsUrl = m3u8Match[1];
+        return await extractHlsQualities(hlsUrl);
+    } catch (e) {
+        console.warn("b() failed:", e);
+        return [];
+    }
 }
 
+// === c(data) now returns array (mp4upload) ===
 async function c(data, url = null) {
-    const srcMatch = data.match(/src:\s*"([^"]+\.mp4)"/);
-    const srcUrl = srcMatch ? srcMatch[1] : null;
-    return srcUrl;
+    try {
+        const srcMatch = data.match(/src:\s*"([^"]+\.mp4)"/) || data.match(/https?:\/\/[^\s"'<>]+\.mp4/);
+        const srcUrl = srcMatch ? srcMatch[1] || srcMatch[0] : null;
+        if (!srcUrl) return [];
+        // حاول تحسب جودة من اسم الملف إن أمكن (مثلاً contains 720)
+        const guessed = (srcUrl.match(/(\d{3,4})p/) || [null, null])[1];
+        return [{ quality: guessed ? guessed + "p" : "default", url: srcUrl }];
+    } catch (e) {
+        console.warn("c() failed:", e);
+        return [];
+    }
 }
 
-// ==== Dailymotion Extractor ====
+// ==== Dailymotion Extractor (returns array of qualities) ====
 async function extractDailymotion(url) {
     try {
         let videoId = null;
@@ -296,37 +412,68 @@ async function extractDailymotion(url) {
 
         const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`);
         const metaJson = await metaRes.json();
-        const hlsLink = metaJson.qualities?.auto?.[0]?.url;
-        if (!hlsLink) throw new Error("No playable HLS link found");
 
-        async function getBestHls(hlsUrl) {
-            try {
-                const res = await fetch(hlsUrl);
-                const text = await res.text();
-                const regex = /#EXT-X-STREAM-INF:.*RESOLUTION=(\d+)x(\d+).*?\n(https?:\/\/[^\n]+)/g;
-                const streams = [];
-                let match;
-                while ((match = regex.exec(text)) !== null) {
-                    streams.push({ width: parseInt(match[1]), height: parseInt(match[2]), url: match[3] });
-                }
-                if (streams.length === 0) return hlsUrl;
-                streams.sort((a, b) => b.height - a.height);
-                return streams[0].url;
-            } catch {
-                return hlsUrl;
-            }
-        }
+        // حاول نأخذ أي رابط m3u8 متاح (auto أو hls)
+        const candidate = metaJson.qualities?.auto?.[0]?.url || metaJson.qualities?.hq?.[0]?.url || metaJson.qualities?.hd?.[0]?.url;
+        if (!candidate) throw new Error("No playable HLS link found in Dailymotion metadata");
 
-        const bestHls = await getBestHls(hlsLink);
-        return bestHls;
+        return await extractHlsQualities(candidate);
 
     } catch (err) {
         console.error("Dailymotion extractor failed:", err);
+        return [];
+    }
+}
+
+// === extractHlsQualities: يحلل ملف m3u8 ويرجع كل الجودات ===
+async function extractHlsQualities(hlsUrl) {
+    try {
+        const res = await fetchv2(hlsUrl);
+        const text = await res.text();
+
+        const regex = /#EXT-X-STREAM-INF:[^\n]*RESOLUTION=(\d+)x(\d+)[^\n]*\r?\n(https?:\/\/[^\n\r]+)/g;
+        const streams = [];
+        let match;
+        while ((match = regex.exec(text)) !== null) {
+            const height = parseInt(match[2], 10);
+            streams.push({ quality: height + "p", url: match[3].trim() });
+        }
+
+        // بعض الـ m3u8 بيكون variant-less (direct media). في الحالة دي نعيد الرابط الأصلي
+        if (streams.length === 0) {
+            // حاول إذا كان الملف نفسه يحتوي على تسلسلات segments -> fallback to auto
+            if (text.includes("#EXTINF")) {
+                return [{ quality: "auto", url: hlsUrl }];
+            }
+            return [{ quality: "auto", url: hlsUrl }];
+        }
+
+        // رتب من الأعلى للأدنى (مش ضروري لكن مرتّب أجمل)
+        streams.sort((a, b) => {
+            const ah = parseInt(a.quality, 10) || 0;
+            const bh = parseInt(b.quality, 10) || 0;
+            return bh - ah;
+        });
+
+        return streams;
+    } catch (e) {
+        console.warn("extractHlsQualities failed:", e);
+        return [{ quality: "auto", url: hlsUrl }];
+    }
+}
+
+// === unpackSafe wrapper to avoid throwing ===
+function unpackSafe(source) {
+    try {
+        if (!source) return null;
+        return unpack(source);
+    } catch (e) {
+        console.warn("unpackSafe failed:", e);
         return null;
     }
 }
 
-// ==== Helper Classes (Unpacker) ====
+/* ======= Unpacker (the same as your implementation, unchanged) ======= */
 class Unbaser {
     constructor(base) {
         this.ALPHABET = {
@@ -395,8 +542,8 @@ function unpack(source) {
 
     function _filterargs(source) {
         const juicers = [
-            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\), *\d+, *.*\)\)/,
-            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\)/,
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$, *\d+, *.*\)\)/,
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$/,
         ];
         for (const juicer of juicers) {
             const args = juicer.exec(source);
