@@ -1,4 +1,7 @@
 async function searchResults(keyword) {
+    // فلترة: نخلي الكلمة إنجليزي + أرقام إنجليزي فقط
+    keyword = keyword.replace(/[^a-zA-Z0-9\s]/g, "");
+
     const uniqueResults = new Map();
 
     for (let i = 1; i <= 5; i++) {
