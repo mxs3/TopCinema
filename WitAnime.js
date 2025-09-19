@@ -155,120 +155,243 @@ async function extractEpisodes(url) {
 // =======================================================================================
 // =======================================================================================
 // ==== Sora stream Made by 50/50 ========================================================
+// === Main extractor - returns the selected stream URL via soraPrompt ===
 async function extractStreamUrl(url) {
     try {
+        // اجلب صفحة الحلقة
         const response = await fetchv2(url);
         const html = await response.text();
         const results = [];
 
-        // 1) هات أي iframe
+        // 0) حاول تفك السيرفرات الداخلية لو موجودة (_zG/_zH) وجيب روابطها
+        const decodedServers = a(html); // دالة a تفك registry وترد قائمة سيرفرات {id, name, url}
+        for (const srv of decodedServers) {
+            try {
+                const res = await fetchv2(srv.url, { headers: { Referer: url } });
+                const iframeHtml = await res.text();
+
+                // التقط m3u8 و mp4 من محتوى الـ iframe أو الصفحة المردودة
+                collectMediaFromHtml(iframeHtml, results, srv.name);
+            } catch (err) {
+                console.log("failed to fetch decoded server url:", srv.url, err && err.message);
+            }
+        }
+
+        // 1) دور على أي iframe موجود في الصفحة الأساسية (لو فيه)
         const iframeMatches = [...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/g)];
         for (const m of iframeMatches) {
             const iframeUrl = m[1];
             try {
-                const res = await fetchv2(iframeUrl);
+                const res = await fetchv2(absoluteUrl(iframeUrl, url), { headers: { Referer: url } });
                 const iframeHtml = await res.text();
-
-                // 2) لقّط أي m3u8
-                const hlsMatches = [...iframeHtml.matchAll(/https?:\/\/[^"'\\s]+\.m3u8[^"'\\s]*/g)];
-                for (const h of hlsMatches) {
-                    results.push({ name: "HLS", url: h[0] });
-                }
-
-                // 3) لقّط أي mp4 (بس عشان نتأكد انه fallback)
-                const mp4Matches = [...iframeHtml.matchAll(/https?:\/\/[^"'\\s]+\.mp4[^"'\\s]*/g)];
-                for (const m4 of mp4Matches) {
-                    results.push({ name: "MP4", url: m4[0] });
-                }
+                collectMediaFromHtml(iframeHtml, results, `iframe:${iframeUrl}`);
             } catch (err) {
-                console.log("iframe failed:", iframeUrl, err.message);
+                console.log("iframe failed:", iframeUrl, err && err.message);
             }
         }
 
-        // 4) كمان نحاول من الصفحة نفسها (احتياطي)
-        const hlsRoot = [...html.matchAll(/https?:\/\/[^"'\\s]+\.m3u8[^"'\\s]*/g)];
-        for (const h of hlsRoot) {
-            results.push({ name: "HLS", url: h[0] });
-        }
-        const mp4Root = [...html.matchAll(/https?:\/\/[^"'\\s]+\.mp4[^"'\\s]*/g)];
-        for (const m4 of mp4Root) {
-            results.push({ name: "MP4", url: m4[0] });
+        // 2) كمان التقط أي m3u8/mp4 مخزنة مباشرة في الصفحة نفسها (احتياطي)
+        collectMediaFromHtml(html, results, "page");
+
+        // 3) بعض الصفحات تخبئ الروابط داخل سكربتات مشفرة eval(...) أو داخل متغيرات - نحاول فكها
+        // ابحث عن script eval packed أو عن src:"...mp4" أو "hls2":"...m3u8"
+        try {
+            // فك سكربتات packed eval واذا لقي hls أو mp4 استخرجهم
+            const evalScripts = [...html.matchAll(/<script[^>]*>(eval\(function\(p,a,c,k,e,d[\s\S]*?\))<\/script>/g)];
+            for (const s of evalScripts) {
+                try {
+                    const unpacked = unpack(s[1]);
+                    collectMediaFromHtml(unpacked, results, "unpacked-eval");
+                } catch (e) {
+                    // لو unpack فشل نكمل
+                }
+            }
+
+            // لو فيه سكربتات تانية ممكن تحتوي على "hls2" او src:.mp4
+            const scriptBlocks = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
+            for (const sb of scriptBlocks) {
+                const body = sb[1];
+                // حاول b() و c() كحالات خاصة، مع الحماية من الأخطاء
+                try {
+                    const maybeM3u8 = await safeCallB(body);
+                    if (maybeM3u8) collectMediaFromHtml(maybeM3u8, results, "b-unpacked");
+                } catch (e) {}
+                try {
+                    const maybeMp4 = await safeCallC(body);
+                    if (maybeMp4) collectMediaFromHtml(maybeMp4, results, "c-extracted");
+                } catch (e) {}
+            }
+        } catch (e) {
+            // لا تفشل العملية بأكملها بسبب هذا الجزء
         }
 
-        if (results.length === 0) {
+        // إزالة التكرارات (نفس الـ URL)
+        const unique = dedupeResults(results);
+
+        if (unique.length === 0) {
             throw new Error("No working streams found");
         }
 
-        // 5) خلي المستخدم يختار
-        const options = results.map(r => `${r.name} → ${r.url}`);
+        // عرض خيارات للمستخدم عبر soraPrompt
+        const options = unique.map(r => `${r.source} → ${r.url}`);
         const choice = await soraPrompt("اختر الفيديو اللي تحب تشغله:", options);
-        return results[choice].url;
+
+        if (typeof choice !== "number" || choice < 0 || choice >= unique.length) {
+            // لو المستخدم ضغط إلغاء أو رجع نتيجة غير صالحة، شغل أول واحد تلقائياً
+            return unique[0].url;
+        }
+
+        return unique[choice].url;
 
     } catch (err) {
-        console.error(err);
-        return "https://files.catbox.moe/avolvc.mp4"; // fallback لو معندناش ولا حاجه
+        console.error("extractStreamUrl error:", err && err.message);
+        // رابط fallback آمن
+        return "https://files.catbox.moe/avolvc.mp4";
     }
 }
 
+// === helper: collect m3u8 and mp4 from HTML/text and push to results array ===
+function collectMediaFromHtml(text, resultsArray, sourceLabel = "unknown") {
+    if (!text) return;
+    // m3u8
+    const hlsMatches = [...String(text).matchAll(/https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/g)];
+    for (const h of hlsMatches) {
+        resultsArray.push({ source: sourceLabel + " (HLS)", url: h[0] });
+    }
+    // mp4
+    const mp4Matches = [...String(text).matchAll(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/g)];
+    for (const m of mp4Matches) {
+        resultsArray.push({ source: sourceLabel + " (MP4)", url: m[0] });
+    }
+}
+
+// === helper: make iframe relative URLs absolute if necessary ===
+function absoluteUrl(maybeRelative, base) {
+    try {
+        return new URL(maybeRelative, base).toString();
+    } catch (e) {
+        return maybeRelative;
+    }
+}
+
+// === helper: remove duplicate URLs, keep first source label ===
+function dedupeResults(results) {
+    const seen = new Set();
+    const out = [];
+    for (const r of results) {
+        if (!r || !r.url) continue;
+        const key = r.url.trim();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ source: r.source || "unknown", url: key });
+    }
+    return out;
+}
+
+// ================= helper functions for WitAnime obfuscation & special cases =================
+
+// === a(html): تفك registry _zG و _zH لو موجودين وترجع array من servers {id,name,url} ===
 function a(html) {
     try {
         const zGMatch = html.match(/var _zG="([^"]+)";/);
         const zHMatch = html.match(/var _zH="([^"]+)";/);
-        if (!zGMatch || !zHMatch) throw new Error("Could not find _zG or _zH in HTML");
+        if (!zGMatch || !zHMatch) return [];
 
-        const resourceRegistry = JSON.parse(atob(zGMatch[1]));
-        const configRegistry = JSON.parse(atob(zHMatch[1]));
+        // decode registries
+        let resourceRegistry = null;
+        let configRegistry = null;
+        try {
+            resourceRegistry = JSON.parse(atob(zGMatch[1]));
+            configRegistry = JSON.parse(atob(zHMatch[1]));
+        } catch (e) {
+            return [];
+        }
 
+        // map server names from .server-link nodes
         const serverNames = {};
-        const serverLinks = html.matchAll(
-            /<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g
-        );
+        const serverLinks = html.matchAll(/<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g);
         for (const match of serverLinks) {
             serverNames[match[1]] = match[2].trim();
         }
 
         const servers = [];
-        for (let i = 0; i < 10; i++) {
+        const maxI = Math.max(resourceRegistry.length || 0, 20);
+        for (let i = 0; i < maxI; i++) {
             const resourceData = resourceRegistry[i];
             const config = configRegistry[i];
             if (!resourceData || !config) continue;
 
-            let decrypted = resourceData.split('').reverse().join('');
-            decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, '');
-            let rawUrl = atob(decrypted);
+            try {
+                // original sites reverse the string and base64-like noise-clean
+                let decrypted = String(resourceData).split('').reverse().join('');
+                decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, '');
+                let rawUrl = atob(decrypted);
 
-            const indexKey = atob(config.k);
-            const paramOffset = config.d[parseInt(indexKey, 10)];
-            rawUrl = rawUrl.slice(0, -paramOffset);
+                // config.k is base64 encoded index key, config.d is offset array
+                const indexKey = atob(String(config.k || ""));
+                const idx = parseInt(indexKey || "0", 10);
+                const paramOffset = (config.d && config.d[idx]) ? config.d[idx] : 0;
+                if (paramOffset && rawUrl.length > paramOffset) {
+                    rawUrl = rawUrl.slice(0, -paramOffset);
+                }
 
-            servers.push({
-                id: i,
-                name: serverNames[i] || `Unknown Server ${i}`,
-                url: rawUrl.trim()
-            });
+                servers.push({
+                    id: i,
+                    name: serverNames[i] || `Server ${i}`,
+                    url: rawUrl.trim()
+                });
+            } catch (e) {
+                // تخطى العنصر لو فشل
+                continue;
+            }
         }
-
         return servers;
-    } catch (error) {
+    } catch (err) {
         return [];
     }
 }
 
+// === b(data): يحاول فك eval-packed script واستخراج "hls2":"..." لو موجود ===
 async function b(data, url = null) {
-    const obfuscatedScript = data.match(/<script[^>]*>\s*(eval\(function\(p,a,c,k,e,d.*?\)[\s\S]*?)<\/script>/);
-    const unpackedScript = unpack(obfuscatedScript[1]);
-    const m3u8Match = unpackedScript.match(/"hls2"\s*:\s*"([^"]+)"/);
-    const m3u8Url = m3u8Match[1];
-    return m3u8Url;
+    try {
+        if (!data) return null;
+        const scrMatch = String(data).match(/<script[^>]*>\s*(eval\(function\(p,a,c,k,e,d[\s\S]*?\))<\/script>/);
+        const packed = scrMatch ? scrMatch[1] : null;
+        if (!packed) return null;
+        const unpacked = unpack(packed);
+        if (!unpacked) return null;
+        const m3u8Match = unpacked.match(/["']hls2["']\s*:\s*["']([^"']+)["']/);
+        if (m3u8Match) return m3u8Match[1];
+        // محاولة عامة للـ m3u8 في النص المفكوك
+        const general = unpacked.match(/https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/);
+        return general ? general[0] : null;
+    } catch (e) {
+        return null;
+    }
 }
 
+// === c(data): يحاول استخراج mp4 من متغيرات داخل السكربت (src:"...mp4") ===
 async function c(data, url = null) {
-    const srcMatch = data.match(/src:\s*"([^"]+\.mp4)"/);
-    const srcUrl = srcMatch ? srcMatch[1] : null;
-    return srcUrl;
+    try {
+        if (!data) return null;
+        const srcMatch = String(data).match(/src\s*:\s*["']([^"']+\.mp4[^"']*)["']/);
+        if (srcMatch) return srcMatch[1];
+        const general = String(data).match(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/);
+        return general ? general[0] : null;
+    } catch (e) {
+        return null;
+    }
 }
 
-// ==== Dailymotion Extractor ====
+// safe callers for b and c to avoid throwing
+async function safeCallB(data) {
+    try { return await b(data); } catch (e) { return null; }
+}
+async function safeCallC(data) {
+    try { return await c(data); } catch (e) { return null; }
+}
+
+// ==== Dailymotion helper (موجود لكن ليس مُجبراً على الاستدعاء) ====
 async function extractDailymotion(url) {
     try {
         let videoId = null;
@@ -291,6 +414,7 @@ async function extractDailymotion(url) {
         const hlsLink = metaJson.qualities?.auto?.[0]?.url;
         if (!hlsLink) throw new Error("No playable HLS link found");
 
+        // حاول نختار أفضل جودة من الـ master m3u8 لو متاح
         async function getBestHls(hlsUrl) {
             try {
                 const res = await fetch(hlsUrl);
@@ -309,16 +433,14 @@ async function extractDailymotion(url) {
             }
         }
 
-        const bestHls = await getBestHls(hlsLink);
-        return bestHls;
-
+        return await getBestHls(hlsLink);
     } catch (err) {
-        console.error("Dailymotion extractor failed:", err);
+        console.error("Dailymotion extractor failed:", err && err.message);
         return null;
     }
 }
 
-// ==== Helper Classes (Unpacker) ====
+// ==== Unpacker (p.a.c.k.e.r) utilities ====
 class Unbaser {
     constructor(base) {
         this.ALPHABET = {
@@ -328,19 +450,16 @@ class Unbaser {
         this.dictionary = {};
         this.base = base;
         if (36 < base && base < 62) {
-            this.ALPHABET[base] = this.ALPHABET[base] ||
-                this.ALPHABET[62].substr(0, base);
+            this.ALPHABET[base] = this.ALPHABET[base] || this.ALPHABET[62].substr(0, base);
         }
         if (2 <= base && base <= 36) {
             this.unbase = (value) => parseInt(value, base);
-        }
-        else {
+        } else {
             try {
                 [...this.ALPHABET[base]].forEach((cipher, index) => {
                     this.dictionary[cipher] = index;
                 });
-            }
-            catch (er) {
+            } catch (er) {
                 throw Error("Unsupported base encoding.");
             }
             this.unbase = this._dictunbaser;
@@ -356,28 +475,23 @@ class Unbaser {
 }
 
 function detect(source) {
-    return source.replace(" ", "").startsWith("eval(function(p,a,c,k,e,");
+    return String(source || "").replace(" ", "").startsWith("eval(function(p,a,c,k,e,");
 }
 
 function unpack(source) {
-    let { payload, symtab, radix, count } = _filterargs(source);
+    // minimal-safe unpack for typical p.a.c.k.e.r. patterns
+    const args = _filterargs(source);
+    let { payload, symtab, radix, count } = args;
     if (count != symtab.length) {
         throw Error("Malformed p.a.c.k.e.r. symtab.");
     }
-    let unbase;
-    try {
-        unbase = new Unbaser(radix);
-    }
-    catch (e) {
-        throw Error("Unknown p.a.c.k.e.r. encoding.");
-    }
+    const unbase = new Unbaser(radix);
     function lookup(match) {
         const word = match;
         let word2;
         if (radix == 1) {
             word2 = symtab[parseInt(word)];
-        }
-        else {
+        } else {
             word2 = symtab[unbase.unbase(word)];
         }
         return word2 || word;
@@ -387,18 +501,18 @@ function unpack(source) {
 
     function _filterargs(source) {
         const juicers = [
-            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\), *\d+, *.*\)\)/,
-            /}\('(.*)', *(\d+|\[\]), *(\d+), *'(.*)'\.split\('\|'\)/,
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$, *\d+, *.*\)\)/,
+            /}$begin:math:text$'(.*)', *(\\d+|\\[\\]), *(\\d+), *'(.*)'\\.split\\('\\|'$end:math:text$/,
         ];
         for (const juicer of juicers) {
-            const args = juicer.exec(source);
-            if (args) {
+            const m = juicer.exec(source);
+            if (m) {
                 try {
                     return {
-                        payload: args[1],
-                        symtab: args[4].split("|"),
-                        radix: parseInt(args[2]),
-                        count: parseInt(args[3]),
+                        payload: m[1],
+                        symtab: m[4].split("|"),
+                        radix: parseInt(m[2]),
+                        count: parseInt(m[3]),
                     };
                 } catch {
                     throw Error("Corrupted p.a.c.k.e.r. data.");
@@ -409,6 +523,7 @@ function unpack(source) {
     }
 
     function _replacestrings(source) {
+        // هنا نعيد النص كما هو (لو احتجت تغييرات خاصة لإزالة escaping افعل ذلك)
         return source;
     }
 }
