@@ -12,13 +12,22 @@ async function searchResults(keyword) {
         while ((match2 = regex2.exec(html2)) !== null) {
             const rawTitle = match2[2].trim();
 
-            // فلترة العنوان ليبقى إنجليزي + أرقام فقط
-            const englishOnlyTitle = rawTitle.replace(/[^a-zA-Z0-9\s:!?\-]/g, "").trim();
+            // Normalize title: remove episode numbers, "والاخيرة", and extra spaces
+            let cleanedTitle = rawTitle
+                .replace(/الحلقة\s*\d+(\.\d+)?(-\d+)?/gi, '')
+                .replace(/الحلقة\s*\d+/gi, '')
+                .replace(/والاخيرة/gi, '')
+                .replace(/\s+/g, ' ')
+                .trim();
 
-            const finalTitle = `${englishOnlyTitle} (${match2[4].trim()})`;
+            // فلترة: خلي العنوان بالإنجليزي + أرقام فقط
+            cleanedTitle = cleanedTitle.replace(/[^a-zA-Z0-9\s]/g, "").trim();
 
-            if (!uniqueResults.has(englishOnlyTitle)) {
-                uniqueResults.set(englishOnlyTitle, {
+            const finalTitle = `${cleanedTitle} (${match2[4].trim()})`;
+
+            // منع التكرار باستخدام Map
+            if (!uniqueResults.has(cleanedTitle)) {
+                uniqueResults.set(cleanedTitle, {
                     title: finalTitle,
                     href: match2[1].trim(),
                     image: match2[3].trim()
