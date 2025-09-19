@@ -159,64 +159,54 @@ async function extractStreamUrl(url) {
     try {
         const response = await fetchv2(url);
         const html = await response.text();
-
-        const servers = a(html);
-        console.log("Servers:", JSON.stringify(servers));
-
         const results = [];
 
-        for (const server of servers) {
-            const name = server.name.toLowerCase();
-            const streamUrl = server.url;
-
+        // 1) هات أي iframe
+        const iframeMatches = [...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/g)];
+        for (const m of iframeMatches) {
+            const iframeUrl = m[1];
             try {
-                if (name.includes("streamwish")) {
-                    const newUrl = "https://hgplaycdn.com/e/" + streamUrl.replace(/^https?:\/\/[^/]+\/e\//, '');
-                    const res = await fetchv2(newUrl);
-                    const html = await res.text();
-                    const result = await b(html);
-                    if (result) results.push({ name: server.name, url: result });
+                const res = await fetchv2(iframeUrl);
+                const iframeHtml = await res.text();
 
-                } else if (name.includes("mp4upload")) {
-                    const res = await fetchv2(streamUrl);
-                    const html = await res.text();
-                    const result = await c(html);
-                    if (result) results.push({ name: server.name, url: result });
-
-                } else if (name.includes("playerwish")) {
-                    const res = await fetchv2(streamUrl);
-                    const html = await res.text();
-                    const result = await b(html);
-                    if (result) results.push({ name: server.name, url: result });
-
-                } else if (name.includes("dailymotion")) {
-                    const result = await extractDailymotion(streamUrl);
-                    if (result) results.push({ name: server.name, url: result });
-
-                } else {
-                    // fallback: نحاول نلقط hls/mp4 غصب من الصفحة
-                    const res = await fetchv2(streamUrl);
-                    const html = await res.text();
-                    const hlsMatch = html.match(/https?:\/\/[^"'\\s]+\.m3u8[^"'\\s]*/);
-                    if (hlsMatch) results.push({ name: server.name, url: hlsMatch[0] });
+                // 2) لقّط أي m3u8
+                const hlsMatches = [...iframeHtml.matchAll(/https?:\/\/[^"'\\s]+\.m3u8[^"'\\s]*/g)];
+                for (const h of hlsMatches) {
+                    results.push({ name: "HLS", url: h[0] });
                 }
-            } catch (e) {
-                console.log("Failed extracting:", server.name, e.message);
+
+                // 3) لقّط أي mp4 (بس عشان نتأكد انه fallback)
+                const mp4Matches = [...iframeHtml.matchAll(/https?:\/\/[^"'\\s]+\.mp4[^"'\\s]*/g)];
+                for (const m4 of mp4Matches) {
+                    results.push({ name: "MP4", url: m4[0] });
+                }
+            } catch (err) {
+                console.log("iframe failed:", iframeUrl, err.message);
             }
+        }
+
+        // 4) كمان نحاول من الصفحة نفسها (احتياطي)
+        const hlsRoot = [...html.matchAll(/https?:\/\/[^"'\\s]+\.m3u8[^"'\\s]*/g)];
+        for (const h of hlsRoot) {
+            results.push({ name: "HLS", url: h[0] });
+        }
+        const mp4Root = [...html.matchAll(/https?:\/\/[^"'\\s]+\.mp4[^"'\\s]*/g)];
+        for (const m4 of mp4Root) {
+            results.push({ name: "MP4", url: m4[0] });
         }
 
         if (results.length === 0) {
             throw new Error("No working streams found");
         }
 
-        // خلي المستخدم يختار
+        // 5) خلي المستخدم يختار
         const options = results.map(r => `${r.name} → ${r.url}`);
-        const choice = await soraPrompt("اختر السيرفر اللي تحب تشغله:", options);
+        const choice = await soraPrompt("اختر الفيديو اللي تحب تشغله:", options);
         return results[choice].url;
 
     } catch (err) {
         console.error(err);
-        return "https://files.catbox.moe/avolvc.mp4";
+        return "https://files.catbox.moe/avolvc.mp4"; // fallback لو معندناش ولا حاجه
     }
 }
 
