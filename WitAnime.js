@@ -155,63 +155,62 @@ async function extractEpisodes(url) {
 // =======================================================================================
 // =======================================================================================
 // ==== Sora stream Made by 50/50 ========================================================
-// === Main extractor - returns the selected stream URL via soraPrompt ===
+// ====== Complete hardened extractor for Sora (copy-paste ready) ======
+
 async function extractStreamUrl(url) {
     try {
-        // اجلب صفحة الحلقة
-        const response = await fetchv2(url);
-        const html = await response.text();
+        const resMain = await safeFetch(url, {}, 10000);
+        if (!resMain) throw new Error("Failed to fetch main page");
+        const html = await resMain.text();
         const results = [];
 
-        // 0) حاول تفك السيرفرات الداخلية لو موجودة (_zG/_zH) وجيب روابطها
-        const decodedServers = a(html); // دالة a تفك registry وترد قائمة سيرفرات {id, name, url}
-        for (const srv of decodedServers) {
-            try {
-                const res = await fetchv2(srv.url, { headers: { Referer: url } });
-                const iframeHtml = await res.text();
-
-                // التقط m3u8 و mp4 من محتوى الـ iframe أو الصفحة المردودة
-                collectMediaFromHtml(iframeHtml, results, srv.name);
-            } catch (err) {
-                console.log("failed to fetch decoded server url:", srv.url, err && err.message);
+        // 0) فك السيرفرات المشفرة داخل الصفحة (مثل WitAnime) وجلب المحتوى منها (محدود 15)
+        try {
+            const decodedServers = a(html).slice(0, 15);
+            for (const srv of decodedServers) {
+                try {
+                    const r = await safeFetch(absoluteUrl(srv.url, url), { headers: { Referer: url } }, 9000);
+                    if (!r) continue;
+                    const txt = await r.text();
+                    collectMediaFromHtml(txt, results, srv.name || `decoded:${srv.id}`);
+                } catch (e) {
+                    console.log("decoded server fetch err:", srv.url, e && e.message);
+                }
             }
-        }
+        } catch (e) { /* continue */ }
 
-        // 1) دور على أي iframe موجود في الصفحة الأساسية (لو فيه)
-        const iframeMatches = [...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/g)];
-        for (const m of iframeMatches) {
-            const iframeUrl = m[1];
-            try {
-                const res = await fetchv2(absoluteUrl(iframeUrl, url), { headers: { Referer: url } });
-                const iframeHtml = await res.text();
-                collectMediaFromHtml(iframeHtml, results, `iframe:${iframeUrl}`);
-            } catch (err) {
-                console.log("iframe failed:", iframeUrl, err && err.message);
+        // 1) افتح أي iframe في الصفحة الأساسية (محدود أول 12)
+        try {
+            const iframeMatches = [...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/g)].slice(0, 12);
+            for (const m of iframeMatches) {
+                const ifr = absoluteUrl(m[1], url);
+                try {
+                    const r = await safeFetch(ifr, { headers: { Referer: url } }, 9000);
+                    if (!r) continue;
+                    const txt = await r.text();
+                    collectMediaFromHtml(txt, results, `iframe:${ifr}`);
+                } catch (e) {
+                    console.log("iframe fetch err:", ifr, e && e.message);
+                }
             }
-        }
+        } catch (e) { /* continue */ }
 
-        // 2) كمان التقط أي m3u8/mp4 مخزنة مباشرة في الصفحة نفسها (احتياطي)
+        // 2) التقط أي روابط مباشرة في الصفحة نفسها
         collectMediaFromHtml(html, results, "page");
 
-        // 3) بعض الصفحات تخبئ الروابط داخل سكربتات مشفرة eval(...) أو داخل متغيرات - نحاول فكها
-        // ابحث عن script eval packed أو عن src:"...mp4" أو "hls2":"...m3u8"
+        // 3) فك سكربتات packed eval وابحث داخل السكربتات عن m3u8/mp4 (آمن)
         try {
-            // فك سكربتات packed eval واذا لقي hls أو mp4 استخرجهم
             const evalScripts = [...html.matchAll(/<script[^>]*>(eval\(function\(p,a,c,k,e,d[\s\S]*?\))<\/script>/g)];
             for (const s of evalScripts) {
                 try {
                     const unpacked = unpack(s[1]);
                     collectMediaFromHtml(unpacked, results, "unpacked-eval");
-                } catch (e) {
-                    // لو unpack فشل نكمل
-                }
+                } catch (e) { /* تجاهل الفشل هنا */ }
             }
 
-            // لو فيه سكربتات تانية ممكن تحتوي على "hls2" او src:.mp4
             const scriptBlocks = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
             for (const sb of scriptBlocks) {
                 const body = sb[1];
-                // حاول b() و c() كحالات خاصة، مع الحماية من الأخطاء
                 try {
                     const maybeM3u8 = await safeCallB(body);
                     if (maybeM3u8) collectMediaFromHtml(maybeM3u8, results, "b-unpacked");
@@ -221,60 +220,83 @@ async function extractStreamUrl(url) {
                     if (maybeMp4) collectMediaFromHtml(maybeMp4, results, "c-extracted");
                 } catch (e) {}
             }
-        } catch (e) {
-            // لا تفشل العملية بأكملها بسبب هذا الجزء
-        }
+        } catch (e) { /* continue */ }
 
-        // إزالة التكرارات (نفس الـ URL)
-        const unique = dedupeResults(results);
+        // 4) اختياري: لو ظهر رابط دالي موشن داخل النتائج نقدر نحلله للحصول على master m3u8 (غير مفعل تلقائياً)
+        // لو احتجت تشغيل extractDailymotion لكل رابط دailymotion في النتائج فعّل هذا الجزء بحذر.
 
-        if (unique.length === 0) {
-            throw new Error("No working streams found");
-        }
+        // dedupe + validate
+        const unique = dedupeResults(results).filter(r => isValidUrl(r.url));
+        if (unique.length === 0) throw new Error("No working streams found");
 
-        // عرض خيارات للمستخدم عبر soraPrompt
+        // اصنع خيارات ل soraPrompt
         const options = unique.map(r => `${r.source} → ${r.url}`);
-        const choice = await soraPrompt("اختر الفيديو اللي تحب تشغله:", options);
 
-        if (typeof choice !== "number" || choice < 0 || choice >= unique.length) {
-            // لو المستخدم ضغط إلغاء أو رجع نتيجة غير صالحة، شغل أول واحد تلقائياً
+        // اطلب من المستخدم يختار عبر soraPrompt — لو soraPrompt غير متاحة تسترجع أول لينك
+        let choiceIndex = null;
+        try {
+            const choice = await soraPrompt("اختر الفيديو اللي تحب تشغله:", options);
+            choiceIndex = (typeof choice === "number") ? choice : null;
+        } catch (e) {
+            // soraPrompt مش متاحة أو المستخدم ألغا -> نستخدم أول رابط تلقائياً
+            choiceIndex = null;
+        }
+
+        if (choiceIndex === null || choiceIndex < 0 || choiceIndex >= unique.length) {
             return unique[0].url;
         }
-
-        return unique[choice].url;
+        return unique[choiceIndex].url;
 
     } catch (err) {
-        console.error("extractStreamUrl error:", err && err.message);
-        // رابط fallback آمن
+        console.error("extractStreamUrl final error:", err && err.message);
         return "https://files.catbox.moe/avolvc.mp4";
     }
 }
 
-// === helper: collect m3u8 and mp4 from HTML/text and push to results array ===
-function collectMediaFromHtml(text, resultsArray, sourceLabel = "unknown") {
-    if (!text) return;
-    // m3u8
-    const hlsMatches = [...String(text).matchAll(/https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/g)];
-    for (const h of hlsMatches) {
-        resultsArray.push({ source: sourceLabel + " (HLS)", url: h[0] });
-    }
-    // mp4
-    const mp4Matches = [...String(text).matchAll(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/g)];
-    for (const m of mp4Matches) {
-        resultsArray.push({ source: sourceLabel + " (MP4)", url: m[0] });
+// ----------------- Helpers -----------------
+
+// safeFetch with timeout (uses fetchv2 to remain compatible with Sora)
+async function safeFetch(input, init = {}, timeoutMs = 8000) {
+    try {
+        return await Promise.race([
+            (typeof fetchv2 === "function" ? fetchv2(input, init) : fetch(input, init)),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), timeoutMs))
+        ]);
+    } catch (e) {
+        return null;
     }
 }
 
-// === helper: make iframe relative URLs absolute if necessary ===
+function isValidUrl(u) {
+    try {
+        if (!u) return false;
+        const parsed = new URL(u);
+        return ["http:", "https:"].includes(parsed.protocol);
+    } catch { return false; }
+}
+
+function collectMediaFromHtml(text, resultsArray, sourceLabel = "unknown") {
+    if (!text) return;
+    const s = String(text);
+    // catch m3u8 (with optional query)
+    const hlsMatches = [...s.matchAll(/https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/g)];
+    for (const h of hlsMatches) {
+        resultsArray.push({ source: sourceLabel + " (HLS)", url: h[0].trim() });
+    }
+    // catch mp4
+    const mp4Matches = [...s.matchAll(/https?:\/\/[^\s"'<>]+\.mp4[^\s"'<>]*/g)];
+    for (const m of mp4Matches) {
+        resultsArray.push({ source: sourceLabel + " (MP4)", url: m[0].trim() });
+    }
+}
+
+// make absolute URL if iframe src is relative
 function absoluteUrl(maybeRelative, base) {
     try {
         return new URL(maybeRelative, base).toString();
-    } catch (e) {
-        return maybeRelative;
-    }
+    } catch { return String(maybeRelative); }
 }
 
-// === helper: remove duplicate URLs, keep first source label ===
 function dedupeResults(results) {
     const seen = new Set();
     const out = [];
@@ -288,18 +310,24 @@ function dedupeResults(results) {
     return out;
 }
 
-// ================= helper functions for WitAnime obfuscation & special cases =================
+// safe wrappers for b and c
+async function safeCallB(data) {
+    try { return await b(data); } catch (e) { return null; }
+}
+async function safeCallC(data) {
+    try { return await c(data); } catch (e) { return null; }
+}
 
-// === a(html): تفك registry _zG و _zH لو موجودين وترجع array من servers {id,name,url} ===
+// ----------------- WitAnime / obfuscation helpers -----------------
+
+// a(html): decode _zG/_zH registries into servers array {id, name, url}
 function a(html) {
     try {
-        const zGMatch = html.match(/var _zG="([^"]+)";/);
-        const zHMatch = html.match(/var _zH="([^"]+)";/);
+        const zGMatch = String(html).match(/var _zG="([^"]+)";/);
+        const zHMatch = String(html).match(/var _zH="([^"]+)";/);
         if (!zGMatch || !zHMatch) return [];
 
-        // decode registries
-        let resourceRegistry = null;
-        let configRegistry = null;
+        let resourceRegistry, configRegistry;
         try {
             resourceRegistry = JSON.parse(atob(zGMatch[1]));
             configRegistry = JSON.parse(atob(zHMatch[1]));
@@ -307,9 +335,8 @@ function a(html) {
             return [];
         }
 
-        // map server names from .server-link nodes
         const serverNames = {};
-        const serverLinks = html.matchAll(/<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g);
+        const serverLinks = String(html).matchAll(/<a[^>]+class="server-link"[^>]+data-server-id="(\d+)"[^>]*>\s*<span class="ser">([^<]+)<\/span>/g);
         for (const match of serverLinks) {
             serverNames[match[1]] = match[2].trim();
         }
@@ -320,14 +347,11 @@ function a(html) {
             const resourceData = resourceRegistry[i];
             const config = configRegistry[i];
             if (!resourceData || !config) continue;
-
             try {
-                // original sites reverse the string and base64-like noise-clean
                 let decrypted = String(resourceData).split('').reverse().join('');
                 decrypted = decrypted.replace(/[^A-Za-z0-9+/=]/g, '');
                 let rawUrl = atob(decrypted);
 
-                // config.k is base64 encoded index key, config.d is offset array
                 const indexKey = atob(String(config.k || ""));
                 const idx = parseInt(indexKey || "0", 10);
                 const paramOffset = (config.d && config.d[idx]) ? config.d[idx] : 0;
@@ -335,23 +359,18 @@ function a(html) {
                     rawUrl = rawUrl.slice(0, -paramOffset);
                 }
 
-                servers.push({
-                    id: i,
-                    name: serverNames[i] || `Server ${i}`,
-                    url: rawUrl.trim()
-                });
+                servers.push({ id: i, name: serverNames[i] || `Server ${i}`, url: rawUrl.trim() });
             } catch (e) {
-                // تخطى العنصر لو فشل
                 continue;
             }
         }
         return servers;
-    } catch (err) {
+    } catch (e) {
         return [];
     }
 }
 
-// === b(data): يحاول فك eval-packed script واستخراج "hls2":"..." لو موجود ===
+// b(data): try to unpack eval-packed script and extract m3u8 (or any m3u8 inside)
 async function b(data, url = null) {
     try {
         if (!data) return null;
@@ -362,7 +381,6 @@ async function b(data, url = null) {
         if (!unpacked) return null;
         const m3u8Match = unpacked.match(/["']hls2["']\s*:\s*["']([^"']+)["']/);
         if (m3u8Match) return m3u8Match[1];
-        // محاولة عامة للـ m3u8 في النص المفكوك
         const general = unpacked.match(/https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/);
         return general ? general[0] : null;
     } catch (e) {
@@ -370,7 +388,7 @@ async function b(data, url = null) {
     }
 }
 
-// === c(data): يحاول استخراج mp4 من متغيرات داخل السكربت (src:"...mp4") ===
+// c(data): try to extract mp4 from script variables or direct occurrences
 async function c(data, url = null) {
     try {
         if (!data) return null;
@@ -383,15 +401,7 @@ async function c(data, url = null) {
     }
 }
 
-// safe callers for b and c to avoid throwing
-async function safeCallB(data) {
-    try { return await b(data); } catch (e) { return null; }
-}
-async function safeCallC(data) {
-    try { return await c(data); } catch (e) { return null; }
-}
-
-// ==== Dailymotion helper (موجود لكن ليس مُجبراً على الاستدعاء) ====
+// ==== Dailymotion helper (optional usage) ====
 async function extractDailymotion(url) {
     try {
         let videoId = null;
@@ -402,10 +412,7 @@ async function extractDailymotion(url) {
         ];
         for (const p of patterns) {
             const match = url.match(p);
-            if (match) {
-                videoId = match[1];
-                break;
-            }
+            if (match) { videoId = match[1]; break; }
         }
         if (!videoId) throw new Error("Invalid Dailymotion URL");
 
@@ -414,11 +421,10 @@ async function extractDailymotion(url) {
         const hlsLink = metaJson.qualities?.auto?.[0]?.url;
         if (!hlsLink) throw new Error("No playable HLS link found");
 
-        // حاول نختار أفضل جودة من الـ master m3u8 لو متاح
         async function getBestHls(hlsUrl) {
             try {
-                const res = await fetch(hlsUrl);
-                const text = await res.text();
+                const r = await fetch(hlsUrl);
+                const text = await r.text();
                 const regex = /#EXT-X-STREAM-INF:.*RESOLUTION=(\d+)x(\d+).*?\n(https?:\/\/[^\n]+)/g;
                 const streams = [];
                 let match;
@@ -428,19 +434,16 @@ async function extractDailymotion(url) {
                 if (streams.length === 0) return hlsUrl;
                 streams.sort((a, b) => b.height - a.height);
                 return streams[0].url;
-            } catch {
-                return hlsUrl;
-            }
+            } catch { return hlsUrl; }
         }
-
         return await getBestHls(hlsLink);
-    } catch (err) {
-        console.error("Dailymotion extractor failed:", err && err.message);
+    } catch (e) {
+        console.error("extractDailymotion err:", e && e.message);
         return null;
     }
 }
 
-// ==== Unpacker (p.a.c.k.e.r) utilities ====
+// ==== Unpacker (p.a.c.k.e.r) minimal utilities ====
 class Unbaser {
     constructor(base) {
         this.ALPHABET = {
@@ -479,7 +482,6 @@ function detect(source) {
 }
 
 function unpack(source) {
-    // minimal-safe unpack for typical p.a.c.k.e.r. patterns
     const args = _filterargs(source);
     let { payload, symtab, radix, count } = args;
     if (count != symtab.length) {
@@ -523,7 +525,6 @@ function unpack(source) {
     }
 
     function _replacestrings(source) {
-        // هنا نعيد النص كما هو (لو احتجت تغييرات خاصة لإزالة escaping افعل ذلك)
         return source;
     }
 }
