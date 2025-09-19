@@ -11,7 +11,7 @@
     "quality": "Auto",
     "baseUrl": "https://witanime.xyz/",
     "searchBaseUrl": "https://witanime.xyz/?s=%s",
-    "scriptUrl": "https://raw.githubusercontent.com/mxs3/witAnime/refs/heads/main/WitAnime.js",
+    "scriptUrl": "https://raw.githubusercontent.com/mxs3/TopCinema/refs/heads/main/TopCinema.js",
     "type": "Anime",
     "asyncJS": true,
     "asyncStream": true
