@@ -1,11 +1,8 @@
 async function searchResults(keyword) {
-    // فلترة: نخلي الكلمة إنجليزي + أرقام إنجليزي فقط
-    keyword = keyword.replace(/[^a-zA-Z0-9\s]/g, "");
-
     const uniqueResults = new Map();
 
     for (let i = 1; i <= 5; i++) {
-        const url = `https://web6.topcinema.cam/search/?query=${keyword}&type=all&offset=${i}`;
+        const url = `https://web6.topcinema.cam/search/?query=${encodeURIComponent(keyword)}&type=all&offset=${i}`;
         const response2 = await soraFetch(url);
         const html2 = await response2.text();
 
@@ -15,18 +12,13 @@ async function searchResults(keyword) {
         while ((match2 = regex2.exec(html2)) !== null) {
             const rawTitle = match2[2].trim();
 
-            // Normalize title: remove episode numbers, "والاخيرة", and extra spaces
-            const cleanedTitle = rawTitle
-                .replace(/الحلقة\s*\d+(\.\d+)?(-\d+)?/gi, '')
-                .replace(/الحلقة\s*\d+/gi, '')
-                .replace(/والاخيرة/gi, '')
-                .replace(/\s+/g, ' ')
-                .trim();
+            // فلترة العنوان ليبقى إنجليزي + أرقام فقط
+            const englishOnlyTitle = rawTitle.replace(/[^a-zA-Z0-9\s:!?\-]/g, "").trim();
 
-            const finalTitle = `${cleanedTitle} (${match2[4].trim()})`;
+            const finalTitle = `${englishOnlyTitle} (${match2[4].trim()})`;
 
-            if (!uniqueResults.has(cleanedTitle)) {
-                uniqueResults.set(cleanedTitle, {
+            if (!uniqueResults.has(englishOnlyTitle)) {
+                uniqueResults.set(englishOnlyTitle, {
                     title: finalTitle,
                     href: match2[1].trim(),
                     image: match2[3].trim()
