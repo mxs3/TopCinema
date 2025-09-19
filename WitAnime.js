@@ -161,57 +161,59 @@ async function extractStreamUrl(url) {
         const html = await response.text();
 
         const servers = a(html);
-        console.log(JSON.stringify(servers));
-        const priorities = [
-            "streamwish - fhd",
-            "streamwish",
-            "mp4upload",
-            "playerwish - fhd",
-            "playerwish",
-            "dailymotion"
-        ];
+        console.log("Servers:", JSON.stringify(servers));
 
-        let chosenServer = null;
-        for (const provider of priorities) {
-            chosenServer = servers.find(s =>
-                s.name.toLowerCase().includes(provider)
-            );
-            if (chosenServer) break;
+        const results = [];
+
+        for (const server of servers) {
+            const name = server.name.toLowerCase();
+            const streamUrl = server.url;
+
+            try {
+                if (name.includes("streamwish")) {
+                    const newUrl = "https://hgplaycdn.com/e/" + streamUrl.replace(/^https?:\/\/[^/]+\/e\//, '');
+                    const res = await fetchv2(newUrl);
+                    const html = await res.text();
+                    const result = await b(html);
+                    if (result) results.push({ name: server.name, url: result });
+
+                } else if (name.includes("mp4upload")) {
+                    const res = await fetchv2(streamUrl);
+                    const html = await res.text();
+                    const result = await c(html);
+                    if (result) results.push({ name: server.name, url: result });
+
+                } else if (name.includes("playerwish")) {
+                    const res = await fetchv2(streamUrl);
+                    const html = await res.text();
+                    const result = await b(html);
+                    if (result) results.push({ name: server.name, url: result });
+
+                } else if (name.includes("dailymotion")) {
+                    const result = await extractDailymotion(streamUrl);
+                    if (result) results.push({ name: server.name, url: result });
+
+                } else {
+                    // fallback: نحاول نلقط hls/mp4 غصب من الصفحة
+                    const res = await fetchv2(streamUrl);
+                    const html = await res.text();
+                    const hlsMatch = html.match(/https?:\/\/[^"'\\s]+\.m3u8[^"'\\s]*/);
+                    if (hlsMatch) results.push({ name: server.name, url: hlsMatch[0] });
+                }
+            } catch (e) {
+                console.log("Failed extracting:", server.name, e.message);
+            }
         }
 
-        if (!chosenServer) {
-            throw new Error("No valid server found");
+        if (results.length === 0) {
+            throw new Error("No working streams found");
         }
 
-        const streamUrl = chosenServer.url;
-        const name = chosenServer.name.toLowerCase();
+        // خلي المستخدم يختار
+        const options = results.map(r => `${r.name} → ${r.url}`);
+        const choice = await soraPrompt("اختر السيرفر اللي تحب تشغله:", options);
+        return results[choice].url;
 
-        if (name.includes("streamwish")) {
-            const newUrl = "https://hgplaycdn.com/e/" + streamUrl.replace(/^https?:\/\/[^/]+\/e\//, '');
-            const response = await fetchv2(newUrl);
-            const html = await response.text();
-            const result = await b(html);
-            return result;
-
-        } else if (name.includes("mp4upload")) {
-            const response = await fetchv2(streamUrl);
-            const html = await response.text();
-            const result = await c(html);
-            return result;
-
-        } else if (name.includes("playerwish")) {
-            const response = await fetchv2(streamUrl);
-            const html = await response.text();
-            const result = await b(html);
-            return result;
-
-        } else if (name.includes("dailymotion")) {
-            const result = await extractDailymotion(streamUrl);
-            return result;
-
-        } else {
-            throw new Error("Unsupported provider: " + chosenServer.name);
-        }
     } catch (err) {
         console.error(err);
         return "https://files.catbox.moe/avolvc.mp4";
